@@ -38,7 +38,23 @@ if (BADGER_DOOM)
             ${CMAKE_CURRENT_LIST_DIR}/badger_display.c
             ${CMAKE_CURRENT_LIST_DIR}/badger_input.c
             )
-    target_compile_definitions(common_pico INTERFACE BADGER_DOOM=1 NO_USE_UART=1)
+    # RP2350A stalled in the SDK's software lock acquisition. Use SIO
+    # spinlocks with the SDK 2.3 numbering that avoids the RP2350-E2 aliases.
+    target_compile_definitions(common_pico INTERFACE BADGER_DOOM=1 NO_USE_UART=1 PICO_USE_SW_SPIN_LOCKS=0)
+    if (PICO_SDK_VERSION_STRING VERSION_LESS "2.3.0")
+        target_compile_definitions(common_pico INTERFACE
+                PICO_SPINLOCK_ID_IRQ=5
+                PICO_SPINLOCK_ID_TIMER=6
+                PICO_SPINLOCK_ID_HARDWARE_CLAIM=7
+                PICO_SPINLOCK_ID_RAND=10
+                PICO_SPINLOCK_ID_ATOMIC=11
+                PICO_SPINLOCK_ID_OS1=18
+                PICO_SPINLOCK_ID_OS2=19
+                PICO_SPINLOCK_ID_STRIPED_FIRST=20
+                PICO_SPINLOCK_ID_STRIPED_LAST=25
+                PICO_SPINLOCK_ID_CLAIM_FREE_FIRST=26
+                )
+    endif()
     target_link_libraries(common_pico INTERFACE hardware_flash hardware_interp hardware_spi)
 else()
     target_sources(common_pico INTERFACE
