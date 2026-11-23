@@ -151,10 +151,8 @@ char			savegamestrings[6][SAVESTRINGSIZE];
 char	endstring[160];
 #endif
 
-#if !DOOM_TINY
+#if !DOOM_TINY && !BADGER_DOOM
 static boolean opldev;
-#else
-#define opldev false
 #endif
 
 //
@@ -224,11 +222,13 @@ static void M_QuitDOOM(int choice);
 
 static void M_ChangeMessages(int choice);
 static void M_ChangeSensitivity(int choice);
+#if !BADGER_DOOM
 static void M_SfxVol(int choice);
 static void M_MusicVol(int choice);
+static void M_Sound(int choice);
+#endif
 static void M_ChangeDetail(int choice);
 static void M_SizeDisplay(int choice);
-static void M_Sound(int choice);
 
 static void M_FinishReadThis(int choice);
 #if !NO_USE_LOAD
@@ -253,7 +253,9 @@ static void M_DrawOptions(void);
 static void M_DrawNetGame(void);
 static void M_DrawNetFoyer(void);
 #endif
+#if !BADGER_DOOM
 static void M_DrawSound(void);
+#endif
 #if !NO_USE_LOAD
 static void M_DrawLoad(void);
 #endif
@@ -265,7 +267,9 @@ static void M_DrawSave(void);
 static void M_DrawSaveLoadBorder(int x,int y, int l);
 #endif
 static void M_SetupNextMenu(menu_t *menudef);
+#if !BADGER_DOOM || !DOOM_TINY || !NO_USE_MOUSE
 static void M_DrawThermo(int x,int y,int thermWidth,int thermDot);
+#endif
 static void M_WriteText(int x, int y, const char *string);
 static int  M_StringWidth(const char *string);
 static int  M_StringHeight(const char *string);
@@ -400,7 +404,9 @@ enum
     mousesens,
     option_empty2,
 #endif
+#if !BADGER_DOOM
     soundvol,
+#endif
     opt_end
 } options_e;
 
@@ -420,7 +426,9 @@ static const menuitem_t OptionsMenu[]=
     {2,VPATCH_NAME(M_MSENS),'m',	M_ChangeSensitivity},
     {-1,VPATCH_NAME_INVALID,'\0',0},
 #endif
+#if !BADGER_DOOM
     {1,VPATCH_NAME(M_SVOL),'s',	M_Sound}
+#endif
 };
 
 menu_t  OptionsDef =
@@ -536,6 +544,7 @@ menu_t  ReadDef2 =
     0
 };
 
+#if !BADGER_DOOM
 //
 // SOUND VOLUME MENU
 //
@@ -565,6 +574,7 @@ menu_t  SoundDef =
     80,64,
     0
 };
+#endif
 
 #if !NO_USE_LOAD
 //
@@ -1027,6 +1037,7 @@ void M_DrawReadThisCommercial(void)
 }
 
 
+#if !BADGER_DOOM
 //
 // Change Sfx & Music volumes
 //
@@ -1079,6 +1090,7 @@ void M_MusicVol(int choice)
 	
     S_SetMusicVolume(musicVolume * 8);
 }
+#endif
 
 
 
@@ -1474,6 +1486,7 @@ void M_FinishReadThis(int choice)
 //
 // M_QuitDOOM
 //
+#if !BADGER_DOOM
 static const sfxenum_t quitsounds[8] =
 {
     sfx_pldeth,
@@ -1497,6 +1510,7 @@ static const sfxenum_t quitsounds2[8] =
     sfx_bspact,
     sfx_sgtatk
 };
+#endif
 
 
 
@@ -1504,6 +1518,7 @@ boolean M_QuitResponse(int key)
 {
     if (key != key_menu_confirm)
 	return false;
+#if !BADGER_DOOM
     if (!netgame)
     {
 	if (gamemode == commercial)
@@ -1514,6 +1529,7 @@ boolean M_QuitResponse(int key)
 	I_WaitVBL(105);
 #endif
     }
+#endif
 #if !DOOM_TINY
     I_Quit ();
 #else
@@ -1620,6 +1636,7 @@ void M_SizeDisplay(int choice)
 
 
 
+#if !BADGER_DOOM || !DOOM_TINY || !NO_USE_MOUSE
 //
 //      Menu Functions
 //
@@ -1653,6 +1670,7 @@ M_DrawThermo
     V_DrawPatchDirect((x + 8) + thermDot * 8, y,
 		      VPATCH_HANDLE(VPATCH_NAME(M_THERMO)));
 }
+#endif
 
 
 void M_StartMessage2
@@ -2128,6 +2146,7 @@ boolean M_Responder (event_t* ev)
 	    return true;
         }
 #endif
+#if !BADGER_DOOM
         else if (key == key_menu_volume)   // Sound Volume
         {
 	    M_StartControlPanel ();
@@ -2136,6 +2155,7 @@ boolean M_Responder (event_t* ev)
 	    S_StartUnpositionedSound( sfx_swtchn);
 	    return true;
 	}
+#endif
 #if !DOOM_TINY
         else if (key == key_menu_detail)   // Detail toggle
         {
@@ -2349,6 +2369,7 @@ void M_StartControlPanel (void)
     itemOn = currentMenu->lastOn;   // JDC
 }
 
+#if !DOOM_TINY && !BADGER_DOOM
 // Display OPL debug messages - hack for GENMIDI development.
 
 static void M_DrawOPLDev(void)
@@ -2382,6 +2403,7 @@ static void M_DrawOPLDev(void)
         curr = p + 1;
     }
 }
+#endif
 
 //
 // M_Drawer
@@ -2451,10 +2473,12 @@ void M_Drawer (void)
 	return;
     }
 
+#if !DOOM_TINY && !BADGER_DOOM
     if (opldev)
     {
         M_DrawOPLDev();
     }
+#endif
 
     if (!menuactive)
 	return;
@@ -2626,7 +2650,7 @@ void M_Init (void)
         EpiDef.numitems = 1;
     }
 
-#if !DOOM_TINY
+#if !DOOM_TINY && !BADGER_DOOM
     opldev = M_CheckParm("-opldev") > 0;
 #endif
 }

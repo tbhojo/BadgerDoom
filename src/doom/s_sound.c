@@ -38,6 +38,13 @@
 #include "w_wad.h"
 #include "z_zone.h"
 
+// These values are also used by the shared startup and configuration code.
+int sfxVolume = 8;
+int musicVolume = 8;
+int snd_channels = 8;
+
+#if !BADGER_DOOM
+
 #if INCLUDE_SOUND_C_IN_S_SOUND
 #undef INCLUDE_SOUND_C_IN_S_SOUND
 #include "sounds.c"
@@ -87,15 +94,6 @@ typedef struct
 
 static channel_t *channels;
 
-// Maximum volume of a sound effect.
-// Internal default is max out of 0-15.
-
-int sfxVolume = 8;
-
-// Maximum volume of music.
-
-int musicVolume = 8;
-
 // Internal volume level, ranging from 0-127
 
 static int snd_SfxVolume;
@@ -107,10 +105,6 @@ static boolean mus_paused;
 // Music currently being played
 
 static musicinfo_t *mus_playing = NULL;
-
-// Number of channels to use
-
-int snd_channels = 8;
 
 //
 // Initializes sound stuff, including volume
@@ -774,3 +768,4 @@ void test_next_sound() {
 }
 #endif
 
+#endif

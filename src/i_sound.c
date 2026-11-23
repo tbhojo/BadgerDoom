@@ -16,6 +16,8 @@
 // DESCRIPTION:  none
 //
 
+#if !BADGER_DOOM
+
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -580,3 +582,5 @@ void I_BindSoundVariables(void)
     M_BindFloatVariable("libsamplerate_scale",   &libsamplerate_scale);
 #endif
 }
+
+#endif

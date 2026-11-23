@@ -24,6 +24,26 @@
 #include "p_mobj.h"
 #include "sounds.h"
 
+#if BADGER_DOOM
+// Skip channel allocation, spatialization, and music lump loading on the badge.
+static inline void S_Init(int sfxVolume, int musicVolume) {}
+static inline void S_Shutdown(void) {}
+static inline void S_Start(void) {}
+static inline void S_StartUnpositionedSound(int sound_id) {}
+static inline void S_StartSound(xy_positioned_t *origin, int sound_id) {}
+static inline void S_StartObjSound(mobj_t *origin, int sound_id) {}
+static inline void S_StopSound(xy_positioned_t *origin) {}
+static inline void S_StopObjSound(mobj_t *origin) {}
+static inline void S_StartMusic(int music_id) {}
+static inline void S_ChangeMusic(int music_id, int looping) {}
+static inline boolean S_MusicPlaying(void) { return false; }
+static inline void S_StopMusic(void) {}
+static inline void S_PauseSound(void) {}
+static inline void S_ResumeSound(void) {}
+static inline void S_UpdateSounds(mobj_t *listener) {}
+static inline void S_SetMusicVolume(int volume) {}
+static inline void S_SetSfxVolume(int volume) {}
+#else
 //
 // Initializes sound stuff, including volume
 // Sets channels, SFX and music volume,
@@ -85,6 +105,7 @@ void S_UpdateSounds(mobj_t *listener);
 
 void S_SetMusicVolume(int volume);
 void S_SetSfxVolume(int volume);
+#endif
 
 extern int snd_channels;
 

@@ -183,6 +183,14 @@ typedef struct
 
 } sound_module_t;
 
+#if BADGER_DOOM
+// Keep shared engine call sites without linking or polling an audio backend.
+static inline void I_InitSound(boolean use_sfx_prefix) {}
+static inline void I_UpdateSound(void) {}
+static inline void I_InitMusic(void) {}
+static inline void I_StopSong(void) {}
+static inline void I_BindSoundVariables(void) {}
+#else
 void I_InitSound(boolean use_sfx_prefix);
 void I_ShutdownSound(void);
 int I_GetSfxLumpNum(should_be_const sfxinfo_t *sfxinfo);
@@ -192,6 +200,7 @@ int I_StartSound(should_be_const sfxinfo_t *sfxinfo, int channel, int vol, int s
 void I_StopSound(int channel);
 boolean I_SoundIsPlaying(int channel);
 void I_PrecacheSounds(should_be_const sfxinfo_t *sounds, int num_sounds);
+#endif
 
 // Interface for music modules
 
@@ -248,6 +257,7 @@ typedef struct
     void (*Poll)(void);
 } music_module_t;
 
+#if !BADGER_DOOM
 void I_InitMusic(void);
 void I_ShutdownMusic(void);
 void I_SetMusicVolume(int volume);
@@ -258,6 +268,7 @@ void I_UnRegisterSong(void *handle);
 void I_PlaySong(void *handle, boolean looping);
 void I_StopSong(void);
 boolean I_MusicIsPlaying(void);
+#endif
 
 #if !DOOM_TINY
 extern int snd_musicdevice;
@@ -272,6 +283,7 @@ extern int snd_maxslicetime_ms;
 extern should_be_const constcharstar snd_musiccmd;
 extern isb_int8_t snd_pitchshift;
 
+#if !BADGER_DOOM
 void I_BindSoundVariables(void);
 
 // DMX version to emulate for OPL emulation:
@@ -282,6 +294,7 @@ typedef enum {
 } opl_driver_ver_t;
 
 void I_SetOPLDriverVer(opl_driver_ver_t ver);
+#endif
 
 #if USE_CONST_SFX
 typedef struct sfxinfo_mut_struct	sfxinfo_mut_t;
