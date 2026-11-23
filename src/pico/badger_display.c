@@ -56,7 +56,7 @@ enum {
     PTL = 0x90, PTIN = 0x91, PTOU = 0x92,
     PANEL_SETTINGS = 0x97, // 128x296, B/W, shift right/scan down, booster and reset release
     LUT_FROM_REGISTERS = 0x20,
-    PLL_100_HZ = 0x3a, PLL_200_HZ = 0x39,
+    PLL_100_HZ = 0x3a,
 };
 
 static enum { OFFLINE, READY, REFRESHING } display_state;
@@ -122,9 +122,6 @@ static void load_partial_waveform(void)
     command(LUT_BW, white, sizeof(white));
     command(LUT_WB, black, sizeof(black));
     command(LUT_BB, black, sizeof(black));
-    // Use the clock paired with Pimoroni's turbo LUT. Their common setup
-    // writes 100 Hz again; keep that slower clock only for our OTP refresh.
-    command(PLL, (const uint8_t[]){PLL_200_HZ}, 1);
 }
 
 static uint64_t transpose_tile(const uint8_t *src)
@@ -226,6 +223,8 @@ bool badger_display_init(void)
     command(TSE, (const uint8_t[]){0x00}, 1);
     command(TCON, (const uint8_t[]){0x22}, 1);
     command(CDI, (const uint8_t[]){0x9c}, 1);
+    // Keep this clock for both waveforms. At 200 Hz BUSY can complete
+    // without producing a visible partial update on the Universe badge.
     command(PLL, (const uint8_t[]){PLL_100_HZ}, 1);
     command_only(PON);
     sleep_ms(1);

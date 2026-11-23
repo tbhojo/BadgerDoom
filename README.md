@@ -20,12 +20,12 @@ The original Chocolate Doom README is [here](README-chocolate.md).
 
 The `github_universe_badger` board builds `doom_tiny` for the **RP2350A** badge
 with the **296×128 monochrome E-Ink panel**. It keeps Doom's game timing and
-renders the entire view, status bar, and menus to the UC8151 panel. The tested
-badge completes turbo partial refreshes in about 150–170 ms (roughly five to
-six visible frames per second during movement). Menus and the pause label use
-solid high-contrast text; a separate wall lighting curve preserves more detail
-on distant surfaces. The port is single-player and silent; USB is for
-diagnostics and reflashing, not keyboard input.
+renders the entire view, status bar, and menus to the UC8151 panel. Partial
+refresh uses the badge-compatible 100 Hz controller clock, with about
+two visible updates per second during movement. Menus and the pause label
+use solid high-contrast text; a separate wall lighting curve preserves more
+detail on distant surfaces. The port is single-player and silent; USB is
+for diagnostics and reflashing, not keyboard input.
 
 ### Build and install
 
