@@ -407,6 +407,9 @@ const lighttable_t*		zlight[LIGHTLEVELS][MAXLIGHTZ];
 #endif
 #else
 int8_t scalelight[LIGHTLEVELS][MAXLIGHTSCALE];
+#if BADGER_DOOM
+int8_t wallscalelight[LIGHTLEVELS][MAXLIGHTSCALE];
+#endif
 int8_t scalelightfixed[MAXLIGHTSCALE];
 #if !NO_USE_ZLIGHT
 int8_t zlight[LIGHTLEVELS][MAXLIGHTZ];
@@ -1052,6 +1055,17 @@ void R_ExecuteSetViewSize(void) {
 
             if (level < 0)
                 level = 0;
+
+#if BADGER_DOOM && USE_LIGHTMAP_INDEXES
+            // The darkest Doom colormaps discard detail before Badger dithers it.
+            // Compress the dark end for walls before clamping, so dim corridors
+            // still darken with distance without losing the far face entirely.
+            const int dark_wall_start = 24;
+            int walllevel = level;
+            if (walllevel > dark_wall_start)
+                walllevel = dark_wall_start + (walllevel - dark_wall_start + 1) / 2;
+            wallscalelight[i][j] = MIN(walllevel, NUMCOLORMAPS - 1);
+#endif
 
             if (level >= NUMCOLORMAPS)
                 level = NUMCOLORMAPS - 1;

@@ -331,6 +331,7 @@ boolean D_Display (void)
 #endif
     oldgamestate = wipegamestate = gamestate;
     
+#if !BADGER_DOOM
     // draw pause pic
     if (paused)
     {
@@ -341,6 +342,7 @@ boolean D_Display (void)
 	    y = viewwindowy+4;
 	V_DrawPatchDirect(viewwindowx + (scaledviewwidth - 68) / 2, y, VPATCH_HANDLE(VPATCH_NAME(M_PAUSE)));
     }
+#endif
 #if DOOM_TINY
     } // end of check of wipe state
 #endif

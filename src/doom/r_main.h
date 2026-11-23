@@ -80,6 +80,9 @@ extern const lighttable_t*	zlight[LIGHTLEVELS][MAXLIGHTZ];
 #endif
 #else
 extern int8_t	scalelight[LIGHTLEVELS][MAXLIGHTSCALE];
+#if BADGER_DOOM
+extern int8_t wallscalelight[LIGHTLEVELS][MAXLIGHTSCALE];
+#endif
 extern int8_t	scalelightfixed[MAXLIGHTSCALE];
 #if !NO_USE_ZLIGHT
 extern int8_t	zlight[LIGHTLEVELS][MAXLIGHTZ];

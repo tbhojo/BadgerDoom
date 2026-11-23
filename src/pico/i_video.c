@@ -46,8 +46,23 @@
 #if BADGER_DOOM
 #include "badger_display.h"
 
-// ITU-R BT.601 luma, stored in the compositor's existing 16-bit pixels.
-#define DOOM_RGB(r, g, b) (((77 * (r) + 150 * (g) + 29 * (b)) + 128) >> 8)
+enum { UI_WHITE = 0x8000 };
+
+static uint16_t ui_palette[256];
+static uint16_t ui_shared_pal[NUM_SHARED_PALETTES][16];
+static unsigned ui_first_patch;
+static bool ui_menu;
+
+void I_SetBadgerOverlay(unsigned first_patch, boolean menu) {
+    ui_first_patch = first_patch;
+    ui_menu = menu;
+}
+
+static inline uint16_t DOOM_RGB(unsigned r, unsigned g, unsigned b) {
+    // Lift shadows without turning true black into stipple.
+    unsigned luma = (77 * r + 150 * g + 29 * b + 128) >> 8;
+    return luma + luma * (255 - luma) / 512;
+}
 #else
 #include "pico/scanvideo.h"
 #include "pico/scanvideo/composable_scanline.h"
@@ -639,7 +654,11 @@ static void scanline_func_wipe(uint32_t *dest, int scanline) {
     }
 }
 
-static inline uint draw_vpatch(uint16_t *dest, patch_t *patch, vpatchlist_t *vp, uint off) {
+static inline uint draw_vpatch(uint16_t *dest, patch_t *patch, vpatchlist_t *vp, uint off, bool ui) {
+    const uint16_t *colors = palette;
+#if BADGER_DOOM
+    if (ui) colors = ui_palette;
+#endif
     int repeat = vp->entry.repeat;
     dest += vp->entry.x;
     int w = vpatch_width(patch);
@@ -657,11 +676,11 @@ static inline uint draw_vpatch(uint16_t *dest, patch_t *patch, vpatchlist_t *vp,
                     int len = *data++;
                     for (int i = 1; i < len; i += 2) {
                         uint v = *data++;
-                        *p++ = palette[pal[v & 0xf]];
-                        *p++ = palette[pal[v >> 4]];
+                        *p++ = colors[pal[v & 0xf]];
+                        *p++ = colors[pal[v >> 4]];
                     }
                     if (len & 1) {
-                        *p++ = palette[pal[(*data++) & 0xf]];
+                        *p++ = colors[pal[(*data++) & 0xf]];
                     }
                     assert(p <= pend);
                     if (p == pend) break;
@@ -672,13 +691,13 @@ static inline uint draw_vpatch(uint16_t *dest, patch_t *patch, vpatchlist_t *vp,
                 uint16_t *p = dest;
                 for (int i = 0; i < w / 2; i++) {
                     uint v = *data++;
-                    if (v & 0xf) p[0] = palette[pal[v & 0xf]];
-                    if (v >> 4) p[1] = palette[pal[v >> 4]];
+                    if (v & 0xf) p[0] = colors[pal[v & 0xf]];
+                    if (v >> 4) p[1] = colors[pal[v >> 4]];
                     p += 2;
                 }
                 if (w & 1) {
                     uint v = *data++;
-                    if (v & 0xf) p[0] = palette[pal[v & 0xf]];
+                    if (v & 0xf) p[0] = colors[pal[v & 0xf]];
                 }
                 break;
             }
@@ -686,13 +705,13 @@ static inline uint draw_vpatch(uint16_t *dest, patch_t *patch, vpatchlist_t *vp,
                 uint16_t *p = dest;
                 for (int i = 0; i < w / 2; i++) {
                     uint v = *data++;
-                    p[0] = palette[pal[v & 0xf]];
-                    p[1] = palette[pal[v >> 4]];
+                    p[0] = colors[pal[v & 0xf]];
+                    p[1] = colors[pal[v >> 4]];
                     p += 2;
                 }
                 if (w & 1) {
                     uint v = *data++;
-                    p[0] = palette[pal[v & 0xf]];
+                    p[0] = colors[pal[v & 0xf]];
                 }
                 break;
             }
@@ -707,23 +726,23 @@ static inline uint draw_vpatch(uint16_t *dest, patch_t *patch, vpatchlist_t *vp,
                         uint v = *data++;
                         v |= (*data++) << 8;
                         v |= (*data++) << 16;
-                        *p++ = palette[pal[v & 0x3f]];
-                        *p++ = palette[pal[(v >> 6) & 0x3f]];
-                        *p++ = palette[pal[(v >> 12) & 0x3f]];
-                        *p++ = palette[pal[(v >> 18) & 0x3f]];
+                        *p++ = colors[pal[v & 0x3f]];
+                        *p++ = colors[pal[(v >> 6) & 0x3f]];
+                        *p++ = colors[pal[(v >> 12) & 0x3f]];
+                        *p++ = colors[pal[(v >> 18) & 0x3f]];
                     }
                     len &= 3;
                     if (len--) {
                         uint v = *data++;
-                        *p++ = palette[pal[v & 0x3f]];
+                        *p++ = colors[pal[v & 0x3f]];
                         if (len--) {
                             v >>= 6;
                             v |= (*data++) << 2;
-                            *p++ = palette[pal[v & 0x3f]];
+                            *p++ = colors[pal[v & 0x3f]];
                             if (len--) {
                                 v >>= 6;
                                 v |= (*data++) << 4;
-                                *p++ = palette[pal[v & 0x3f]];
+                                *p++ = colors[pal[v & 0x3f]];
                                 assert(!len);
                             }
                         }
@@ -741,7 +760,7 @@ static inline uint draw_vpatch(uint16_t *dest, patch_t *patch, vpatchlist_t *vp,
                     p += gap;
                     int len = *data++;
                     for (int i = 0; i < len; i++) {
-                        *p++ = palette[pal[*data++]];
+                        *p++ = colors[pal[*data++]];
                     }
                     assert(p <= pend);
                     if (p == pend) break;
@@ -749,10 +768,10 @@ static inline uint draw_vpatch(uint16_t *dest, patch_t *patch, vpatchlist_t *vp,
                 break;
             }
             case vp_border: {
-                dest[0] = palette[*data++];
-                uint16_t col = palette[*data++];
+                dest[0] = colors[*data++];
+                uint16_t col = colors[*data++];
                 for (int i = 1; i < w - 1; i++) dest[i] = col;
-                dest[w-1] = palette[*data++];
+                dest[w-1] = colors[*data++];
                 break;
             }
             default:
@@ -762,6 +781,9 @@ static inline uint draw_vpatch(uint16_t *dest, patch_t *patch, vpatchlist_t *vp,
     } else {
         uint sp = vpatch_shared_palette(patch);
         uint16_t *pal16 = shared_pal[sp];
+#if BADGER_DOOM
+        if (ui) pal16 = ui_shared_pal[sp];
+#endif
         assert(sp < NUM_SHARED_PALETTES);
         switch (vpatch_type(patch)) {
             case vp4_solid: {
@@ -933,6 +955,12 @@ void __noinline new_frame_init_overlays_palette_and_wipe() {
                 }
             }
             next_pal = -1;
+#if BADGER_DOOM
+            for (unsigned i = 0; i < count_of(palette); ++i) {
+                // Keep the bright letter faces, not Doom's dark drop shadows.
+                ui_palette[i] = palette[i] >= 40 ? UI_WHITE : 0;
+            }
+#endif
             assert(vpatch_type(stbar) == vp4_solid); // no transparent, no runs, 4 bpp
             for (int i = 0; i < NUM_SHARED_PALETTES; i++) {
                 patch_t *patch = resolve_vpatch_handle(vpatch_for_shared_palette[i]);
@@ -940,6 +968,9 @@ void __noinline new_frame_init_overlays_palette_and_wipe() {
                 assert(vpatch_has_shared_palette(patch));
                 for (int j = 0; j < 16; j++) {
                     shared_pal[i][j] = palette[vpatch_palette(patch)[j]];
+#if BADGER_DOOM
+                    ui_shared_pal[i][j] = ui_palette[vpatch_palette(patch)[j]];
+#endif
                 }
             }
         }
@@ -999,7 +1030,15 @@ void __no_inline_not_in_flash_func(new_frame_stuff)() {
 
 // Overlay source offsets advance on each row, even when a backend downsamples it.
 static inline void compose_scanline(uint32_t *dest, int scanline) {
-    scanline_funcs[display_video_type](dest, scanline);
+#if BADGER_DOOM
+    if (ui_menu) {
+        // Modal options and prompts need a clean canvas, not dithered title art.
+        memset(dest, 0, SCREENWIDTH * sizeof(uint16_t));
+    } else
+#endif
+    {
+        scanline_funcs[display_video_type](dest, scanline);
+    }
     if (display_video_type < FIRST_VIDEO_TYPE_WITH_OVERLAYS) {
         return;
     }
@@ -1022,8 +1061,21 @@ static inline void compose_scanline(uint32_t *dest, int scanline) {
         patch_t *patch = resolve_vpatch_handle(overlays[vp].entry.patch_handle);
         int yoff = scanline - overlays[vp].entry.y;
         if (yoff < vpatch_height(patch)) {
+            bool ui = false;
+#if BADGER_DOOM
+            ui = (unsigned)vp >= ui_first_patch;
+            if (!ui && ui_menu) {
+                prev = vp;
+                continue;
+            }
+            if (ui && !ui_menu && overlays[vp].entry.patch_handle == VPATCH_M_PAUSE) {
+                // Give PAUSE a solid backing without hiding the whole view.
+                int x = overlays[vp].entry.x;
+                memset((uint16_t *)dest + x - 4, 0, (vpatch_width(patch) + 8) * sizeof(uint16_t));
+            }
+#endif
             vpatchlists->vpatch_doff[vp] = draw_vpatch((uint16_t *)dest, patch, &overlays[vp],
-                                                     vpatchlists->vpatch_doff[vp]);
+                                                     vpatchlists->vpatch_doff[vp], ui);
             prev = vp;
         } else {
             vpatchlists->vpatch_next[prev] = vpatchlists->vpatch_next[vp];
@@ -1065,14 +1117,15 @@ void I_FinishUpdate(void) {
         if (source_y < last_y) {
             compose_scanline(scanline, source_y++);
             for (int x = 0; x < BADGER_WIDTH; ++x) {
-                sum[x] += pixels[(2 * x + 1) * SCREENWIDTH / (2 * BADGER_WIDTH)];
+                const uint16_t p = pixels[(2 * x + 1) * SCREENWIDTH / (2 * BADGER_WIDTH)];
+                sum[x] = ((sum[x] | p) & UI_WHITE) ? UI_WHITE : sum[x] + p;
             }
         }
         const uint8_t *threshold = bayer[y & 3];
         for (int x = 0; x < BADGER_WIDTH;) {
             uint8_t bits = 0;
             for (int bit = 0; bit < 8; ++bit, ++x) {
-                bits = (bits << 1) | (sum[x] >= rows * threshold[x & 3]);
+                bits = (bits << 1) | ((sum[x] & UI_WHITE) || sum[x] >= rows * threshold[x & 3]);
             }
             *out++ = bits;
         }

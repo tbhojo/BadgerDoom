@@ -2578,11 +2578,13 @@ void M_Ticker (void)
 #endif
     }
 #endif
+#if !BADGER_DOOM
     if (--skullAnimCounter <= 0)
     {
 	whichSkull ^= 1;
 	skullAnimCounter = 8;
     }
+#endif
 }
 
 

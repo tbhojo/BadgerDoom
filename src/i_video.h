@@ -126,6 +126,10 @@ enum {
 extern uint8_t next_video_type;
 extern uint8_t next_frame_index; // next frame_index to be picked up by the diplsau
 extern uint8_t next_overlay_index;
+#if BADGER_DOOM
+// The UI patches are the final entries in the completed overlay list.
+void I_SetBadgerOverlay(unsigned first_patch, boolean menu);
+#endif
 #if !DEMO1_ONLY
 extern uint8_t *next_video_scroll;
 #endif

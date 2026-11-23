@@ -2851,6 +2851,9 @@ void pd_end_frame(int wipe_start) {
                 if (!wipestate) WI_Drawer();
                 if (pre_wipe_state) {
                     draw_framebuffer_patches_fullscreen();
+#if BADGER_DOOM
+                    V_BeginPatchList(vpatchlists->overlays[render_overlay_index]);
+#endif
                 }
                 break;
             }
@@ -2928,8 +2931,11 @@ void pd_end_frame(int wipe_start) {
     }
 //    ST_FpsDrawer(render_col_count);
 //    ST_FpsDrawer(cached_flat_slots);
+#if !BADGER_DOOM
     ST_FpsDrawer(-1);
+#endif
 
+#if !BADGER_DOOM
     // todo this might not be right
     // advance demo is set on the last frame of a demo, pre_wipe_state is set for last frame of gameplay in other state changes (by g_game)
     // inhelpscreens has skull which is in an iconvenient place
@@ -2938,6 +2944,7 @@ void pd_end_frame(int wipe_start) {
         // render menu/hu to framebuffer (otherwise it goes to the overlay)
         V_BeginPatchList(vpatchlists->framebuffer);
     }
+#endif
 
     if (!pre_wipe_state && !wipestate && gamestate == GS_LEVEL && gametic && !inhelpscreens) {
         HU_Drawer();
@@ -2947,13 +2954,29 @@ void pd_end_frame(int wipe_start) {
         F_CastDrawer(); // just draw the text
     }
 #endif
+#if BADGER_DOOM
+    // Keep modal UI separate from the indexed world so the E-Ink compositor
+    // can give it a solid backdrop and preserve thin glyph strokes.
+    auto *overlay = vpatchlists->overlays[render_overlay_index];
+    const unsigned first_ui_patch = overlay->header.size;
+    if (paused && !menuactive && !inhelpscreens) {
+        vpatch_handle_large_t handle = VPATCH_HANDLE(VPATCH_NAME(M_PAUSE));
+        V_DrawPatchDirect((SCREENWIDTH - vpatch_width(resolve_vpatch_handle(handle))) / 2,
+                          8, handle);
+    }
+#endif
     M_Drawer();
+#if BADGER_DOOM
+    I_SetBadgerOverlay(first_ui_patch, menuactive && !inhelpscreens);
+#endif
 
+#if !BADGER_DOOM
     if (render_menu_etc_to_fb) {
         // render menu/hu to framebuffer
         V_RestoreBuffer();
         V_DrawPatchList(vpatchlists->framebuffer);
     }
+#endif
     if (pre_wipe_state == PRE_WIPE_EXTRA_FRAME_NEEDED) {
         pre_wipe_state = PRE_WIPE_EXTRA_FRAME_DONE;
     }

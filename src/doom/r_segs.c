@@ -110,6 +110,10 @@ const lighttable_t**	walllights;
 int8_t *walllights;
 #endif
 
+#if !BADGER_DOOM || !USE_LIGHTMAP_INDEXES
+#define wallscalelight scalelight
+#endif
+
 #if !NO_DRAWSEGS
 short *maskedtexturecol;
 //
@@ -142,11 +146,11 @@ R_RenderMaskedSegRange
         lightnum++;
 
     if (lightnum < 0)
-        walllights = scalelight[0];
+        walllights = wallscalelight[0];
     else if (lightnum >= LIGHTLEVELS)
-        walllights = scalelight[LIGHTLEVELS - 1];
+        walllights = wallscalelight[LIGHTLEVELS - 1];
     else
-        walllights = scalelight[lightnum];
+        walllights = wallscalelight[lightnum];
 
     maskedtexturecol = ds->maskedtexturecol;
 
@@ -835,11 +839,11 @@ R_StoreWallRange
                 lightnum++;
 
             if (lightnum < 0)
-                walllights = scalelight[0];
+                walllights = wallscalelight[0];
             else if (lightnum >= LIGHTLEVELS)
-                walllights = scalelight[LIGHTLEVELS - 1];
+                walllights = wallscalelight[LIGHTLEVELS - 1];
             else
-                walllights = scalelight[lightnum];
+                walllights = wallscalelight[lightnum];
         }
     }
 
