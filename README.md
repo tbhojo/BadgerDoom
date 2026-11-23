@@ -27,9 +27,9 @@ reflashing, not keyboard input.
 
 ### Build and install
 
-Use Pico SDK 2.1.1 or newer with the SDK's TinyUSB submodule initialized,
-Arm GNU Toolchain 13.2.Rel1, and a separate CMake build directory. Pico Extras
-is not needed.
+The tested toolchain is CMake 3.26, Pico SDK 2.1.1 (with its TinyUSB
+submodule initialized), Arm GNU 13.2.Rel1, and picotool 2.1.1. Use a separate
+CMake build directory. Pico Extras is not needed.
 
 ```sh
 cmake -S . -B build-badger -DCMAKE_BUILD_TYPE=MinSizeRel \
@@ -53,9 +53,9 @@ keeps the firmware below the WHX slot. On-badge saves use flash offsets
 `0x200000`–`0x2fffff`; they do not touch the firmware, WHX, or top MiB.
 
 On boot the panel clears, then shows Doom's title screen. USB CDC reports the
-boot, WHX check, panel initialization, and first frame. Once Doom is running
-you can use `picotool load -f -u -v -x build-badger/src/doom_tiny.uf2` to
-update it without touching the WHX or saves.
+boot, WHX check, panel initialization, and first frame. To update the
+firmware, reenter BOOTSEL and load the new UF2. You do not need to reload
+the WHX or erase saves.
 
 To restore the pre-install image, reenter BOOTSEL and run
 `picotool load -v -t bin badger-backup.bin -o 0x10000000`, then
