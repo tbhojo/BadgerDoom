@@ -46,6 +46,8 @@
 #if BADGER_DOOM
 #include "badger_display.h"
 #include "badger_tone.h"
+#include "doom/d_items.h"
+#include "doom/doomstat.h"
 
 enum { UI_WHITE = 0x8000 };
 
@@ -1092,6 +1094,122 @@ static inline void compose_scanline(uint32_t *dest, int scanline) {
 }
 
 #if BADGER_DOOM
+enum {
+    BADGER_HUD_TOP = (MAIN_VIEWHEIGHT * BADGER_HEIGHT + SCREENHEIGHT - 1) / SCREENHEIGHT,
+    BADGER_HUD_PITCH = BADGER_WIDTH / 8,
+    HUD_DASH = 10, HUD_A, HUD_B, HUD_E, HUD_H, HUD_K, HUD_L, HUD_M,
+    HUD_O, HUD_R, HUD_S, HUD_T, HUD_Y,
+};
+
+// Five-bit rows, MSB on the left. Numerals use the same font at 2x.
+static const uint8_t badger_hud_font[][7] = {
+    [0]        = {0x0e, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0e},
+    [1]        = {0x04, 0x0c, 0x04, 0x04, 0x04, 0x04, 0x0e},
+    [2]        = {0x0e, 0x11, 0x01, 0x02, 0x04, 0x08, 0x1f},
+    [3]        = {0x1e, 0x01, 0x01, 0x0e, 0x01, 0x01, 0x1e},
+    [4]        = {0x02, 0x06, 0x0a, 0x12, 0x1f, 0x02, 0x02},
+    [5]        = {0x1f, 0x10, 0x10, 0x1e, 0x01, 0x01, 0x1e},
+    [6]        = {0x0e, 0x10, 0x10, 0x1e, 0x11, 0x11, 0x0e},
+    [7]        = {0x1f, 0x01, 0x02, 0x04, 0x08, 0x08, 0x08},
+    [8]        = {0x0e, 0x11, 0x11, 0x0e, 0x11, 0x11, 0x0e},
+    [9]        = {0x0e, 0x11, 0x11, 0x0f, 0x01, 0x01, 0x0e},
+    [HUD_DASH] = {0x00, 0x00, 0x00, 0x0e, 0x00, 0x00, 0x00},
+    [HUD_A]    = {0x0e, 0x11, 0x11, 0x1f, 0x11, 0x11, 0x11},
+    [HUD_B]    = {0x1e, 0x11, 0x11, 0x1e, 0x11, 0x11, 0x1e},
+    [HUD_E]    = {0x1f, 0x10, 0x10, 0x1e, 0x10, 0x10, 0x1f},
+    [HUD_H]    = {0x11, 0x11, 0x11, 0x1f, 0x11, 0x11, 0x11},
+    [HUD_K]    = {0x11, 0x12, 0x14, 0x18, 0x14, 0x12, 0x11},
+    [HUD_L]    = {0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x1f},
+    [HUD_M]    = {0x11, 0x1b, 0x15, 0x15, 0x11, 0x11, 0x11},
+    [HUD_O]    = {0x0e, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0e},
+    [HUD_R]    = {0x1e, 0x11, 0x11, 0x1e, 0x14, 0x12, 0x11},
+    [HUD_S]    = {0x0f, 0x10, 0x10, 0x0e, 0x01, 0x01, 0x1e},
+    [HUD_T]    = {0x1f, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04},
+    [HUD_Y]    = {0x11, 0x11, 0x0a, 0x04, 0x04, 0x04, 0x04},
+};
+
+static void badger_hud_glyph(uint8_t *dest, unsigned x, unsigned y, unsigned glyph, bool large) {
+    const unsigned width = large ? 10 : 5;
+    const unsigned offset = x & 7;
+    const unsigned shift = 16 - width - offset;
+    dest += y * BADGER_HUD_PITCH + x / 8;
+    for (unsigned row = 0; row < count_of(badger_hud_font[glyph]); ++row) {
+        unsigned bits = badger_hud_font[glyph][row];
+        if (large) {
+            // Spread the five bits to even positions, then duplicate each.
+            bits = (bits | (bits << 4)) & 0x10f;
+            bits = (bits | (bits << 2)) & 0x133;
+            bits = (bits | (bits << 1)) & 0x155;
+            bits |= bits << 1;
+        }
+        bits <<= shift;
+        // HUD positions keep every glyph within two bytes of its row.
+        dest[0] |= bits >> 8;
+        if (width + offset > 8) dest[1] |= bits;
+        dest += BADGER_HUD_PITCH;
+        if (large) {
+            dest[0] |= bits >> 8;
+            dest[1] |= bits;
+            dest += BADGER_HUD_PITCH;
+        }
+    }
+}
+
+static void badger_hud_label(uint8_t *dest, unsigned x, unsigned y,
+                             const uint8_t *label, unsigned length) {
+    for (unsigned i = 0; i < length; ++i, x += 6) {
+        badger_hud_glyph(dest, x, y, label[i], false);
+    }
+}
+
+static void badger_hud_number(uint8_t *dest, unsigned x, int value) {
+    // Three digits cover every stock Doom ammo, health and armor value.
+    unsigned digits = value < 0 ? 0 : value > 999 ? 999 : value;
+    do {
+        badger_hud_glyph(dest, x, 3, digits % 10, true);
+        x -= 12;
+        digits /= 10;
+    } while (digits);
+}
+
+static void badger_draw_hud(uint8_t *dest) {
+    static const uint8_t ammo_label[] = {HUD_A, HUD_M, HUD_M, HUD_O};
+    static const uint8_t health_label[] = {HUD_H, HUD_E, HUD_A, HUD_L, HUD_T, HUD_H};
+    static const uint8_t armor_label[] = {HUD_A, HUD_R, HUD_M, HUD_O, HUD_R};
+    static const uint8_t keys_label[] = {HUD_K, HUD_E, HUD_Y, HUD_S};
+    static const struct {
+        card_t card, skull;
+        uint8_t glyph;
+    } keys[] = {
+        {it_redcard, it_redskull, HUD_R},
+        {it_yellowcard, it_yellowskull, HUD_Y},
+        {it_bluecard, it_blueskull, HUD_B},
+    };
+
+    memset(dest, 0xff, BADGER_HUD_PITCH); // One-pixel divider above the black field.
+    memset(dest + BADGER_HUD_PITCH, 0, (BADGER_HEIGHT - BADGER_HUD_TOP - 1) * BADGER_HUD_PITCH);
+
+    const player_t *player = &players[displayplayer];
+    const ammotype_t ammo = weaponinfo[player->readyweapon].ammo;
+    badger_hud_label(dest, 10, 7, ammo_label, count_of(ammo_label));
+    if (ammo == am_noammo) {
+        badger_hud_glyph(dest, 56, 3, HUD_DASH, true);
+        badger_hud_glyph(dest, 68, 3, HUD_DASH, true);
+    } else {
+        badger_hud_number(dest, 68, player->ammo[ammo]);
+    }
+    badger_hud_label(dest, 89, 7, health_label, count_of(health_label));
+    badger_hud_number(dest, 156, player->health);
+    badger_hud_label(dest, 175, 7, armor_label, count_of(armor_label));
+    badger_hud_number(dest, 236, player->armorpoints);
+    badger_hud_label(dest, 262, 2, keys_label, count_of(keys_label));
+    for (unsigned i = 0; i < count_of(keys); ++i) {
+        if (player->cards[keys[i].card] || player->cards[keys[i].skull]) {
+            badger_hud_glyph(dest, 260 + i * 12, 11, keys[i].glyph, false);
+        }
+    }
+}
+
 void I_FinishUpdate(void) {
     // A fixed 8×8 screen-space pattern gives up to 64 tones without
     // shimmering between partial refreshes or binarizing dark artwork.
@@ -1125,7 +1243,11 @@ void I_FinishUpdate(void) {
     // content below the footer that needs fitting onto the panel.
     const int footer_y = (BADGER_MENU_FOOTER_Y * BADGER_HEIGHT + SCREENHEIGHT - 1) / SCREENHEIGHT;
     const bool has_footer = ui_menu || ui_help;
-    for (int y = 0; y < BADGER_HEIGHT; ++y) {
+    // The normal double-buffered level view (including automap and pause)
+    // has a status-bar region. Leave full-screen artwork and wipes alone.
+    const bool has_hud = display_video_type == VIDEO_TYPE_DOUBLE && gamestate == GS_LEVEL && !has_footer;
+    const int scene_height = has_hud ? BADGER_HUD_TOP : BADGER_HEIGHT;
+    for (int y = 0; y < scene_height; ++y) {
         const int last_y = has_footer && y >= footer_y
                          ? source_y + 1 : (y + 1) * SCREENHEIGHT / BADGER_HEIGHT;
         const int rows = last_y - source_y;
@@ -1149,6 +1271,7 @@ void I_FinishUpdate(void) {
             *out++ = bits;
         }
     }
+    if (has_hud) badger_draw_hud(out);
 
     if (!submitted || memcmp(frames[next], frames[next ^ 1], BADGER_FRAME_BYTES)) {
         badger_display_submit(frames[next]);

@@ -30,6 +30,13 @@ to clear residual images. Expect a visible flash and about five seconds
 before the panel can update again. The port is single-player and silent;
 USB is for diagnostics and reflashing, not keyboard input.
 
+The Badger HUD uses native-resolution, undithered text and large numbers
+for current-weapon ammo, health, and armor. `--` means the weapon does
+not use ammo; held red, yellow, and blue keys appear as `R`, `Y`, and `B`.
+Walkable step faces are brightened relative to the floor so the steps
+stand out without changing level geometry. In E1M1, the first room's
+side staircase is through the opening on your left as you enter.
+
 ### Build and install
 
 The tested toolchain is CMake 3.26, Pico SDK 2.1.1 (with its TinyUSB

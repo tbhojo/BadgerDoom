@@ -16,6 +16,9 @@ typedef enum {
     PDCOL_MASKED,
     PDCOL_FLOOR,
     PDCOL_CEILING,
+#if BADGER_DOOM
+    PDCOL_STEP,
+#endif
 } pd_column_type;
 
 extern volatile uint8_t interp_in_use;

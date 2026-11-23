@@ -39,6 +39,19 @@
 #include "p_spec.h"
 #endif
 
+#if BADGER_DOOM && USE_WHD && PD_COLUMNS
+#include "info.h"
+
+static boolean rw_step_riser;
+
+static boolean R_IsLiquidFlat(int pic)
+{
+    // The WHD special flat table contains animated liquids and the sky.
+    unsigned special = whd_flattospecial[pic];
+    return special != 0xff && special != FLAT_NAME(F_SKY1);
+}
+#endif
+
 #if PD_COLUMNS && USE_WHD
 void pd_add_column2(pd_column_type type);
 #else
@@ -453,7 +466,11 @@ void R_RenderSegLoop(void) {
                     dc_source = R_GetColumn(bottomtexture,
                                             texturecolumn);
 #if PD_COLUMNS
+#if BADGER_DOOM && USE_WHD
+                    pd_add_column2(rw_step_riser ? PDCOL_STEP : PDCOL_BOTTOM);
+#else
                     pd_add_column2(PDCOL_BOTTOM);
+#endif
 #endif
                     if (!no_draw_bottom)
                         colfunc();
@@ -629,6 +646,9 @@ R_StoreWallRange
     worldbottom = sector_floorheight(frontsector) - viewz;
 
     midtexture = toptexture = bottomtexture = maskedtexture = 0;
+#if BADGER_DOOM && USE_WHD && PD_COLUMNS
+    rw_step_riser = false;
+#endif
 #if !NO_DRAWSEGS
     ds_p->maskedtexturecol = NULL;
 #endif
@@ -746,6 +766,18 @@ R_StoreWallRange
         if (worldlow > worldbottom) {
             // bottom texture
             bottomtexture = lookup_texture(texture_translation(side_bottomtexture(sidedef)));
+#if BADGER_DOOM && USE_WHD && PD_COLUMNS
+            // Use the actual opening, not worldtop (which the sky seam hack
+            // above may have replaced), and match Doom's 24-unit step limit.
+            rw_step_riser = bottomtexture && !fixedcolormap
+                && worldlow - worldbottom <= 24 * FRACUNIT
+                && !(line_flags(linedef) & ML_BLOCKING)
+                && !side_midtexture(sidedef)
+                && MIN(sector_ceilingheight(frontsector) - viewz, worldhigh) - worldlow
+                    >= mobjinfo[MT_PLAYER].height
+                && !R_IsLiquidFlat(frontsector->floorpic)
+                && !R_IsLiquidFlat(backsector->floorpic);
+#endif
 
             if (line_flags(linedef) & ML_DONTPEGBOTTOM) {
                 // bottom of texture at bottom

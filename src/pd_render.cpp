@@ -12,6 +12,7 @@
 #include "hardware/gpio.h"
 #if BADGER_DOOM
 #include "pico/multicore.h"
+#include "pico/badger_tone.h"
 #endif
 #include "pico/divider.h"
 #include "image_decoder.h"
@@ -268,6 +269,63 @@ static_assert(sizeof(flat_run) == 6, "");
 static_assert(sizeof(pd_column) == 12, "");
 static_assert(sizeof(pd_column) == sizeof(flat_run) * 2, ""); // we pack two into the space of the other
 
+#if BADGER_DOOM
+// Textured columns clamp inverse scale to 20 bits. Planes keep their full
+// 24-bit scale, so the marker is only meaningful on textured columns.
+static constexpr uint32_t STEP_SCALE_FLAG = 1u << 23;
+static_assert(STEP_SCALE_FLAG > DDA_MAX, "");
+
+static uint8_t badger_step_palette[256];
+
+static void init_badger_step_palette() {
+    static bool initialized;
+    if (initialized) return;
+
+    const auto *playpal = static_cast<const uint8_t *>(W_CacheLumpName("PLAYPAL", PU_STATIC));
+    uint8_t tones[256];
+    int16_t nearest[256];
+    std::fill_n(nearest, 256, -1);
+    for (unsigned i = 0; i < 256; ++i) {
+        const uint8_t *rgb = playpal + 3 * i;
+        tones[i] = badger_scene_tone(rgb[0], rgb[1], rgb[2]);
+        nearest[tones[i]] = i;
+    }
+    // Fill gaps by assigning each missing tone to the nearer palette entry.
+    int lower = -1;
+    for (int upper = 0; upper <= 256; ++upper) {
+        if (upper < 256 && nearest[upper] < 0) continue;
+        for (int t = lower + 1; t < upper; ++t) {
+            nearest[t] = lower < 0 || (upper < 256 && upper - t < t - lower)
+                         ? nearest[upper] : nearest[lower];
+        }
+        lower = upper;
+    }
+    for (unsigned i = 0; i < 256; ++i) {
+        // Mix 3/8 white into the *lit* tone: a distinct surface, but with its
+        // original texture detail and distance/sector lighting still visible.
+        unsigned target = tones[i] + (255 - tones[i]) * 3 / 8;
+        badger_step_palette[i] = nearest[target];
+    }
+    initialized = true;
+}
+#endif
+
+static uint32_t column_sort_scale(const pd_column &c) {
+#if BADGER_DOOM
+    if ((c.scale & STEP_SCALE_FLAG) && c.texturemid != TEXTUREMID_PLANE)
+        return c.scale & ~STEP_SCALE_FLAG;
+#endif
+    return c.scale;
+}
+
+static fixed_t column_fracstep(const pd_column &c) {
+    uint32_t scale = c.scale; // Only called for textured columns.
+#if BADGER_DOOM
+    scale &= ~STEP_SCALE_FLAG;
+#endif
+    return scale ? DDA_UP_SHIFT(scale) : FRACUNIT;
+}
+
 static __aligned(4) int16_t column_heads[SCREENWIDTH * 2];
 #define fuzzy_column_heads (&column_heads[SCREENWIDTH])
 
@@ -303,6 +361,10 @@ const char *type_name(pd_column column) {
             return "masked";
         case PDCOL_BOTTOM:
             return "bottom";
+#if BADGER_DOOM
+        case PDCOL_STEP:
+            return "step";
+#endif
         case PDCOL_CEILING:
             return "ceiling";
         case PDCOL_FLOOR:
@@ -439,7 +501,7 @@ static void push_down_x_guts(int x, int16_t new_index) {
         }
         // there is some overlap
         assert(existing_col.yl <= new_col.yh);
-        if (new_col.scale < existing_col.scale) {
+        if (column_sort_scale(new_col) < column_sort_scale(existing_col)) {
             // new column is in front of existing column
             const auto &cf = new_col;
             auto &cb = existing_col;
@@ -636,7 +698,7 @@ static void push_down_x_fuzzy(int x, int16_t new_index) {
         }
         // there is some overlap
         assert(existing_col.yl <= new_col.yh);
-        if (new_col.scale < existing_col.scale) {
+        if (column_sort_scale(new_col) < column_sort_scale(existing_col)) {
             // fuzzy column is in front of existing column
             const auto &cf = new_col;
             auto &cb = existing_col;
@@ -890,6 +952,12 @@ void pd_add_column(pd_column_type type) {
     assert(render_cols[rc_index].yl >= 0 && render_cols[rc_index].yl < MAIN_VIEWHEIGHT && render_cols[rc_index].yh >= 0 && render_cols[rc_index].yh < MAIN_VIEWHEIGHT);
     assert(!(pd_flag & 2)); // don't think this can happen
     render_cols[rc_index].scale = pd_flag & 2 ? 0 : iscale;
+#if BADGER_DOOM
+    if (type == PDCOL_STEP) {
+        init_badger_step_palette();
+        render_cols[rc_index].scale |= STEP_SCALE_FLAG;
+    }
+#endif
     render_cols[rc_index].colormap_index = dc_colormap_index;
     render_cols[rc_index].next = -1;
     render_cols[rc_index].texturemid = DOWN_SHIFT(texturemid);
@@ -1556,6 +1624,7 @@ static void draw_visplanes(int16_t fr_list) {
     }
 }
 
+template<bool step_riser = false>
 static inline void col_render(uint8_t *dest, uint count, const uint8_t *source, fixed_t frac, fixed_t fracstep, const lighttable_t* colormap) {
 #if 0 && PICO_ON_DEVICE
     col_interp->accum[0] = xs->col.frac;
@@ -1599,11 +1668,29 @@ static inline void col_render(uint8_t *dest, uint count, const uint8_t *source, 
     xs->col.frac = col_interp->accum[0];
 #else
     do {
-        *dest = colormap[source[(frac >> FRACBITS) & 127]];
+        auto color = colormap[source[(frac >> FRACBITS) & 127]];
+#if BADGER_DOOM
+        if (step_riser) color = badger_step_palette[color];
+#endif
+        *dest = color;
         dest += SCREENWIDTH;
         frac += fracstep;
     } while (count--);
 #endif
+}
+
+static inline void draw_texture_column(uint8_t *dest, const pd_column &c, const uint8_t *pixels,
+                                       const lighttable_t *colormap) {
+    assert(c.texturemid != TEXTUREMID_PLANE);
+    fixed_t fracstep = column_fracstep(c);
+    fixed_t frac = UP_SHIFT(c.texturemid) + (c.yl - centery) * fracstep;
+#if BADGER_DOOM
+    if (c.scale & STEP_SCALE_FLAG) {
+        col_render<true>(dest, c.yh - c.yl, pixels, frac, fracstep, colormap);
+        return;
+    }
+#endif
+    col_render(dest, c.yh - c.yl, pixels, frac, fracstep, colormap);
 }
 
 struct patch_hash_entry_header {
@@ -1843,8 +1930,7 @@ static void draw_patch_columns(int patch_num, int patch_head, int16_t *col_heads
         // we can see the last pixel we've used, which means, as a bonus, we won't decode all of a column when we only
         // use the top
         fixed_t texturemid = UP_SHIFT(c.texturemid);
-        fixed_t fracstep = DDA_UP_SHIFT(c.scale);
-        if (!fracstep) fracstep = 0x10000;
+        fixed_t fracstep = column_fracstep(c);
         fixed_t start = (texturemid + (c.yl - centery) * fracstep) >> FRACBITS;
         fixed_t end = (texturemid + (c.yh - centery) * fracstep) >> FRACBITS;
         if (start < -1) {
@@ -1927,11 +2013,7 @@ static void draw_patch_columns(int patch_num, int patch_head, int16_t *col_heads
                     const auto &c = render_cols[i & 0x7fffu];
                     uint8_t *p = render_frame_buffer + __mul_instruction(c.yl, SCREENWIDTH) + c.x +
                                  ((i & 0x8000u) >> 7u);
-                    assert (c.texturemid != TEXTUREMID_PLANE);
-                    fixed_t fracstep = DDA_UP_SHIFT(c.scale);
-                    if (!fracstep) fracstep = 0x10000;
-                    fixed_t frac = UP_SHIFT(c.texturemid) + (c.yl - centery) * fracstep;
-                    col_render(p, c.yh - c.yl, pixels, frac, fracstep, dc_colormap);
+                    draw_texture_column(p, c, pixels, dc_colormap);
                     i = c.next;
                 } while (i != -1);
             } else {
@@ -1942,10 +2024,7 @@ static void draw_patch_columns(int patch_num, int patch_head, int16_t *col_heads
 #if NO_USE_DC_COLORMAP
                     should_be_const lighttable_t *dc_colormap = colormaps + 256 * c.colormap_index;
 #endif
-                    assert (c.texturemid != TEXTUREMID_PLANE);
-                    fixed_t fracstep = DDA_UP_SHIFT(c.scale);
-                    if (!fracstep) fracstep = 0x10000;
-                    fixed_t frac = UP_SHIFT(c.texturemid) + (c.yl - centery) * fracstep;
+                    draw_texture_column(p, c, pixels, dc_colormap);
 //                    if (get_core_num()) {
 //                        for(int yy=c.yl;yy<=c.yh;yy++) {
 //                            p[0] = 0xfc;
@@ -1957,7 +2036,6 @@ static void draw_patch_columns(int patch_num, int patch_head, int16_t *col_heads
 //                            p += SCREENWIDTH;
 //                        }
 //                    }
-                    col_render(p, c.yh - c.yl, pixels, frac, fracstep, dc_colormap);
                     i = c.next;
                 } while (i != -1);
             }
@@ -1988,8 +2066,7 @@ static void draw_composite_columns(int texture_num, int tex_head) {
         // we can see the last pixel we've used, which means, as a bonus, we won't decode all of a column when we only
         // use the top
         fixed_t texturemid = UP_SHIFT(c.texturemid);
-        fixed_t fracstep = DDA_UP_SHIFT(c.scale);
-        if (!fracstep) fracstep = 0x10000;
+        fixed_t fracstep = column_fracstep(c);
         fixed_t start = (texturemid + (c.yl - centery) * fracstep) >> FRACBITS;
         fixed_t end = (texturemid + (c.yh - centery) * fracstep) >> FRACBITS;
         if (start < -1 || end > 128) {
@@ -2237,11 +2314,7 @@ static void draw_composite_columns(int texture_num, int tex_head) {
                                 const auto &c = render_cols[i & 0x7fffu];
                                 uint8_t *p = render_frame_buffer + __mul_instruction(c.yl, SCREENWIDTH) + c.x +
                                              ((i & 0x8000u) >> 7u);
-                                assert (c.texturemid != TEXTUREMID_PLANE);
-                                fixed_t fracstep = DDA_UP_SHIFT(c.scale);
-                                if (!fracstep) fracstep = 0x10000;
-                                fixed_t frac = UP_SHIFT(c.texturemid) + (c.yl - centery) * fracstep;
-                                col_render(p, c.yh - c.yl, pixels, frac, fracstep, dc_colormap);
+                                draw_texture_column(p, c, pixels, dc_colormap);
                                 i = c.next;
                             } while (i != -1);
                         } else {
@@ -2252,11 +2325,7 @@ static void draw_composite_columns(int texture_num, int tex_head) {
     #if NO_USE_DC_COLORMAP
                                 should_be_const lighttable_t *dc_colormap = colormaps + 256 * c.colormap_index;
     #endif
-                                assert (c.texturemid != TEXTUREMID_PLANE);
-                                fixed_t fracstep = DDA_UP_SHIFT(c.scale);
-                                if (!fracstep) fracstep = 0x10000;
-                                fixed_t frac = UP_SHIFT(c.texturemid) + (c.yl - centery) * fracstep;
-                                col_render(p, c.yh - c.yl, pixels, frac, fracstep, dc_colormap);
+                                draw_texture_column(p, c, pixels, dc_colormap);
                                 i = c.next;
                             } while (i != -1);
                         }
@@ -2271,6 +2340,9 @@ static void draw_composite_columns(int texture_num, int tex_head) {
                         should_be_const lighttable_t *dc_colormap = colormaps + 256 * c.colormap_index;
     #endif
                         uint8_t lcolor = dc_colormap[color];
+#if BADGER_DOOM
+                        if (c.scale & STEP_SCALE_FLAG) lcolor = badger_step_palette[lcolor];
+#endif
     //                    fixed_t texturemid = UP_SHIFT(c.texturemid);
     //                    fixed_t fracstep = DDA_UP_SHIFT(c.scale);
     //                    fixed_t start = (texturemid + (c.yl - centery) * fracstep) >> FRACBITS;
