@@ -45,6 +45,7 @@
 
 #if BADGER_DOOM
 #include "badger_display.h"
+#include "badger_face.h"
 #include "badger_tone.h"
 #include "doom/d_items.h"
 #include "doom/doomstat.h"
@@ -1140,6 +1141,7 @@ static const uint8_t badger_hud_font[][7] = {
 static void badger_hud_glyph(uint8_t *dest, unsigned x, unsigned y, unsigned glyph, bool large) {
     const unsigned width = large ? 10 : 5;
     const unsigned offset = x & 7;
+    assert(width + offset <= 16);
     const unsigned shift = 16 - width - offset;
     dest += y * BADGER_HUD_PITCH + x / 8;
     for (unsigned row = 0; row < count_of(badger_hud_font[glyph]); ++row) {
@@ -1200,29 +1202,76 @@ static void badger_draw_hud(uint8_t *dest) {
 
     const player_t *player = &players[displayplayer];
     const ammotype_t ammo = weaponinfo[player->readyweapon].ammo;
-    badger_hud_label(dest, 10, 7, ammo_label, count_of(ammo_label));
+    badger_hud_label(dest, 5, 7, ammo_label, count_of(ammo_label));
     if (ammo == am_noammo) {
-        badger_hud_glyph(dest, 56, 3, HUD_DASH, true);
-        badger_hud_glyph(dest, 68, 3, HUD_DASH, true);
+        badger_hud_glyph(dest, 45, 3, HUD_DASH, true);
+        badger_hud_glyph(dest, 57, 3, HUD_DASH, true);
     } else {
-        badger_hud_number(dest, 68, player->ammo[ammo]);
+        badger_hud_number(dest, 57, player->ammo[ammo]);
     }
-    badger_hud_label(dest, 89, 7, health_label, count_of(health_label));
-    badger_hud_number(dest, 156, player->health);
-    badger_hud_label(dest, 175, 7, armor_label, count_of(armor_label));
-    badger_hud_number(dest, 236, player->armorpoints);
-    badger_hud_label(dest, 262, 2, keys_label, count_of(keys_label));
+    badger_hud_label(dest, 77, 7, health_label, count_of(health_label));
+    badger_hud_number(dest, 138, player->health);
+    badger_draw_face(dest, 152, 2);
+    badger_hud_label(dest, 181, 7, armor_label, count_of(armor_label));
+    badger_hud_number(dest, 238, player->armorpoints);
+    badger_hud_label(dest, 266, 2, keys_label, count_of(keys_label));
     for (unsigned i = 0; i < count_of(keys); ++i) {
         if (player->cards[keys[i].card] || player->cards[keys[i].skull]) {
-            badger_hud_glyph(dest, 260 + i * 12, 11, keys[i].glyph, false);
+            badger_hud_glyph(dest, 266 + i * 11, 11, keys[i].glyph, false);
         }
     }
 }
 
-void I_FinishUpdate(void) {
-    // Keep finely shaded artwork; stagger short pixel clusters in the
-    // world so dim surfaces don't turn into a regular screen-door grid.
-    // The lowest nonblack level fills only 1/8 of a tile.
+static void badger_sample_tone_row(uint16_t *row, int *source_y, int last_y) {
+    static uint32_t scanline[SCREENWIDTH / 2];
+    const uint16_t *pixels = (const uint16_t *)scanline;
+    compose_scanline(scanline, (*source_y)++);
+    for (int x = 0; x < BADGER_WIDTH; ++x) {
+        row[x] = pixels[(2 * x + 1) * SCREENWIDTH / (2 * BADGER_WIDTH)];
+    }
+    if (*source_y < last_y) {
+        compose_scanline(scanline, (*source_y)++);
+        for (int x = 0; x < BADGER_WIDTH; ++x) {
+            const uint16_t p = pixels[(2 * x + 1) * SCREENWIDTH / (2 * BADGER_WIDTH)];
+            row[x] = ((row[x] | p) & UI_WHITE) ? UI_WHITE : (row[x] + p) >> 1;
+        }
+    }
+}
+
+static inline bool badger_neighbor_matches(int tone, int neighbor) {
+    return (unsigned)(neighbor - tone + 20) <= 40;
+}
+
+static inline int badger_scene_edge(int tone, int left, int right, int above, int below) {
+    // Only boost a contrast that continues along the other axis. This also
+    // reinforces narrow bars (same signed difference on both sides), but
+    // avoids amplifying isolated texels and most low-contrast texture noise.
+    int dx = 0;
+    int dy = 0;
+    if (!((left | right) & UI_WHITE) &&
+        (badger_neighbor_matches(tone, above) || badger_neighbor_matches(tone, below))) {
+        dx = 2 * tone - left - right;
+    }
+    if (!((above | below) & UI_WHITE) &&
+        (badger_neighbor_matches(tone, left) || badger_neighbor_matches(tone, right))) {
+        dy = 2 * tone - above - below;
+    }
+    const int ax = dx < 0 ? -dx : dx;
+    const int ay = dy < 0 ? -dy : dy;
+    const int edge = ax >= ay ? dx : dy;
+    const int magnitude = ax >= ay ? ax : ay;
+    if (magnitude <= 32) return tone;
+    int boost = (magnitude - 32) >> 2;
+    if (boost > 24) boost = 24;
+    const int sharpened = tone + (edge > 0 ? boost : -boost);
+    return sharpened < 0 ? 0 : sharpened > 255 ? 255 : sharpened;
+}
+
+static void badger_pack_tone_row(uint8_t *out, int y, const uint16_t *row,
+                                 const uint16_t *above, const uint16_t *below) {
+    // Keep an ordered, pixel-anchored threshold for both scene and artwork.
+    // Unlike shared thresholds within a cluster, fine steps keep distinct
+    // textures and shadow levels visible even when the scene is still.
     static const uint8_t bayer[8][8] = {
         {  2, 130,  34, 162,  10, 138,  42, 170},
         {194,  66, 226,  98, 202,  74, 234, 106},
@@ -1233,64 +1282,68 @@ void I_FinishUpdate(void) {
         { 62, 190,  30, 158,  54, 182,  22, 150},
         {254, 126, 222,  94, 246, 118, 214,  86},
     };
-    static const uint8_t clustered[8][8] = {
-        { 20,  20,  72, 124,  72, 168, 168,  72},
-        { 44,  44,  72, 124, 124, 216, 216, 124},
-        { 72,  72, 168, 168,  20,  72, 124,  20},
-        {124, 124, 216, 216,  44,  72, 124,  44},
-        { 72, 124,  44,  44, 216, 124, 124, 216},
-        {168, 168,  72,  72, 124,  20,  20,  72},
-        {216, 216, 124, 124, 124,  44,  44,  72},
-        { 72, 124,  20,  20, 168,  72,  72, 168},
-    };
+    const uint8_t *threshold = bayer[y & 7];
+    for (int x = 0; x < BADGER_WIDTH;) {
+        uint8_t bits = 0;
+        for (int bit = 0; bit < 8; ++bit, ++x) {
+            int tone = row[x];
+            if (above && !(tone & UI_WHITE)) {
+                tone = badger_scene_edge(tone, row[x - 1], row[x + 1], above[x], below[x]);
+            }
+            bits = (bits << 1) | (tone >= threshold[bit]);
+        }
+        *out++ = bits;
+    }
+}
+
+void I_FinishUpdate(void) {
+    // Three panel-width tone rows, padded by one sample at each side.
+    static uint16_t tones[3][BADGER_WIDTH + 2];
     static uint8_t frames[2][BADGER_FRAME_BYTES];
     static unsigned next;
     static bool submitted;
-    static uint32_t scanline[SCREENWIDTH / 2];
-    static uint16_t sum[BADGER_WIDTH];
 
     // Sampling is on core 0 between game frames. Core 1 only draws geometry;
     // the panel refreshes on its own while both cores render the next frame.
     new_frame_stuff();
-    if (!badger_display_ready() || display_video_type < FIRST_VIDEO_TYPE_WITH_OVERLAYS) {
-        return;
-    }
-
-    uint8_t *out = frames[next];
-    const uint16_t *pixels = (const uint16_t *)scanline;
-    int source_y = 0;
-    // Keep the small control hints at native height. The menu has no
-    // content below the footer that needs fitting onto the panel.
-    const int footer_y = (BADGER_MENU_FOOTER_Y * BADGER_HEIGHT + SCREENHEIGHT - 1) / SCREENHEIGHT;
     const bool has_footer = ui_menu || ui_help;
     // The normal double-buffered level view (including automap and pause)
     // has a status-bar region. Leave full-screen artwork and wipes alone.
     const bool has_hud = display_video_type == VIDEO_TYPE_DOUBLE && gamestate == GS_LEVEL && !has_footer;
+    if (!badger_display_ready(has_hud && paused) || display_video_type < FIRST_VIDEO_TYPE_WITH_OVERLAYS) {
+        return;
+    }
+
+    uint8_t *out = frames[next];
+    int source_y = 0;
+    // Keep the small control hints at native height. The menu has no
+    // content below the footer that needs fitting onto the panel.
+    const int footer_y = (BADGER_MENU_FOOTER_Y * BADGER_HEIGHT + SCREENHEIGHT - 1) / SCREENHEIGHT;
     const bool world = has_hud && !automapactive;
     const int scene_height = has_hud ? BADGER_HUD_TOP : BADGER_HEIGHT;
-    for (int y = 0; y < scene_height; ++y) {
-        const int last_y = has_footer && y >= footer_y
-                         ? source_y + 1 : (y + 1) * SCREENHEIGHT / BADGER_HEIGHT;
-        const int rows = last_y - source_y;
-        compose_scanline(scanline, source_y++);
-        for (int x = 0; x < BADGER_WIDTH; ++x) {
-            sum[x] = pixels[(2 * x + 1) * SCREENWIDTH / (2 * BADGER_WIDTH)];
-        }
-        if (source_y < last_y) {
-            compose_scanline(scanline, source_y++);
-            for (int x = 0; x < BADGER_WIDTH; ++x) {
-                const uint16_t p = pixels[(2 * x + 1) * SCREENWIDTH / (2 * BADGER_WIDTH)];
-                sum[x] = ((sum[x] | p) & UI_WHITE) ? UI_WHITE : sum[x] + p;
+    // Artwork and the binary map need just one row. For the world, wait for
+    // the row below before packing; read each composed source row only once.
+    for (int y = 0; y < scene_height + world; ++y) {
+        if (y < scene_height) {
+            uint16_t *row = tones[world ? y % 3 : 0] + 1;
+            const int last_y = has_footer && y >= footer_y
+                             ? source_y + 1 : (y + 1) * SCREENHEIGHT / BADGER_HEIGHT;
+            badger_sample_tone_row(row, &source_y, last_y);
+            if (world) {
+                row[-1] = row[0];
+                row[BADGER_WIDTH] = row[BADGER_WIDTH - 1];
             }
         }
-        const uint8_t *threshold = world ? clustered[y & 7] : bayer[y & 7];
-        for (int x = 0; x < BADGER_WIDTH;) {
-            uint8_t bits = 0;
-            for (int bit = 0; bit < 8; ++bit, ++x) {
-                bits = (bits << 1) | ((sum[x] & UI_WHITE) || sum[x] >= rows * threshold[bit]);
-            }
-            *out++ = bits;
+        if (world) {
+            if (!y) continue;
+            const uint16_t *row = tones[(y - 1) % 3] + 1;
+            const uint16_t *above = y > 1 ? tones[(y - 2) % 3] + 1 : row;
+            const uint16_t *below = y < scene_height ? tones[y % 3] + 1 : row;
+            badger_pack_tone_row(out, y - 1, row, above, below);
+        } else {
+            badger_pack_tone_row(out, y, tones[0] + 1, NULL, NULL);
         }
+        out += BADGER_HUD_PITCH;
     }
     if (has_hud) badger_draw_hud(out);
 

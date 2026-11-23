@@ -20,26 +20,29 @@ The original Chocolate Doom README is [here](README-chocolate.md).
 
 The `github_universe_badger` board builds `doom_tiny` for the **RP2350A** badge
 with the **296×128 monochrome E-Ink panel**. It keeps Doom's game timing and
-renders the entire view, status bar, and menus to the UC8151 panel. Partial
-refresh uses the badge-compatible 100 Hz controller clock, with about
-two visible updates per second during movement. The original DOOM logo keeps
-its shading, menu text and the pause label use high contrast, and distant
-surfaces retain more detail in monochrome. After at least 16 partial
-updates, a picture that stays still for five seconds gets a full refresh
-to clear residual images. Expect a visible flash and about five seconds
-before the panel can update again. The port is single-player and silent;
-USB is for diagnostics and reflashing, not keyboard input.
+renders the entire view, status bar, and menus to the UC8151 panel. Normal
+updates use a [differential waveform](https://github.com/antirez/uc8151_micropython)
+at the badge-compatible 100 Hz controller clock, leaving unchanged pixels
+undriven. To clear ghosting, hold **A+C** and tap **Down** to pause. After
+at least 16 updates since the last clean, leaving the paused picture still
+for five seconds triggers one full refresh. Expect a flash and about five
+seconds before the panel can update again; the full refresh is not scheduled
+during gameplay. The port is single-player and silent; USB is for diagnostics
+and reflashing, not keyboard input.
 
 The Badger HUD uses native-resolution, undithered text and large numbers
 for current-weapon ammo, health, and armor. `--` means the weapon does
 not use ammo; held red, yellow, and blue keys appear as `R`, `Y`, and `B`.
+The original Doomguy portrait reacts to health, damage, and other game
+events. It skips idle glances so a stationary picture can settle.
 Walkable step faces are brightened relative to the floor so the steps
 stand out without changing level geometry. In E1M1, the first room's
 side staircase is through the opening on your left as you enter.
 
-Gameplay uses grouped halftone dots instead of fine-grained dithering. Living
-monsters use a separate high-contrast treatment for their visible sprite
-pixels; fuzzy spectres and lighting effects such as invulnerability keep
+Gameplay preserves small brightness differences and emphasizes edges and
+wall angles to distinguish gates, grilles, and bends. Visible monsters and
+pickups get a local contrast lift without repainting their whole silhouette.
+Fuzzy spectres and fixed-colormap effects such as invulnerability retain
 their normal rendering. The automap uses a large heading arrow, solid walls,
 dashed height changes, and small crossbars on discovered doors. Secret doors
 still look like walls, and the map does not reveal new areas on open.

@@ -790,17 +790,19 @@ void R_ProjectSprite(mobj_t *thing) {
         vis->colormap = spritelights[index];
     }
 #if BADGER_DOOM
-    // Lost Souls and Doom II's exposed boss brain do not count toward kills.
-    // Death clears SHOOTABLE; leave fuzz and fixed-colormap effects alone.
     const int flags = thing->flags;
-    if (!fixedcolormap && (flags & MF_SHOOTABLE)
-        && !(flags & (MF_SHADOW | MF_CORPSE | MF_MISSILE))
-        && ((flags & MF_COUNTKILL) || thing->type == MT_SKULL || thing->type == MT_BOSSBRAIN))
-        pd_flag |= PD_FLAG_MONSTER;
+    // Lost Souls and the exposed boss brain do not count toward kills.
+    const boolean living_monster = (flags & MF_SHOOTABLE) &&
+        !(flags & (MF_CORPSE | MF_MISSILE)) &&
+        ((flags & MF_COUNTKILL) || thing->type == MT_SKULL || thing->type == MT_BOSSBRAIN);
+    // Only shade the actual sprite texels; the regular depth sort and clips
+    // still decide whether each texel is hidden by walls, masked posts, etc.
+    if (!fixedcolormap && !(flags & MF_SHADOW) && (living_monster || (flags & MF_SPECIAL)))
+        pd_flag |= PD_FLAG_FOCAL;
 #endif
     R_DrawSpriteEarly(vis);
 #if BADGER_DOOM
-    pd_flag &= ~PD_FLAG_MONSTER;
+    pd_flag &= ~PD_FLAG_FOCAL;
 #endif
 }
 

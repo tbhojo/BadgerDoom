@@ -12,9 +12,10 @@
 // Call all display functions from the same core.
 bool badger_display_init(void);
 
-// Poll regularly, even when the frame is unchanged. May start a full clean
-// of the last frame; never waits for the panel. True if ready for a new frame.
-bool badger_display_ready(void);
+// Poll regularly, even when the frame is unchanged. True if ready for a
+// new frame. Allows a deferred full clean only while the caller reports an
+// explicitly quiet state such as pause; this function never waits for BUSY.
+bool badger_display_ready(bool quiet);
 
 // Call only when ready. Copies a row-major, MSB-first frame (1 = white) to
 // the controller over SPI before returning. The panel refresh runs afterwards.

@@ -46,6 +46,11 @@ void ST_Ticker (void);
 // Called by main loop.
 void ST_Drawer (boolean fullscreen, boolean refresh);
 
+#if BADGER_DOOM
+// WHD patch handle for the native HUD's current expression.
+unsigned ST_BadgerFaceHandle(void);
+#endif
+
 void ST_FpsDrawer(int fps);
 
 // Called when the console player is spawned on each level.

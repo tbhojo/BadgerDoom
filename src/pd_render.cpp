@@ -273,12 +273,12 @@ static_assert(sizeof(pd_column) == sizeof(flat_run) * 2, ""); // we pack two int
 // Textured columns clamp inverse scale to 20 bits. Planes keep their full
 // 24-bit scale, so the markers are only meaningful on textured columns.
 static constexpr uint32_t STEP_SCALE_FLAG = 1u << 23;
-static constexpr uint32_t MONSTER_SCALE_FLAG = 1u << 22;
-static constexpr uint32_t TEXTURED_SCALE_FLAGS = STEP_SCALE_FLAG | MONSTER_SCALE_FLAG;
+static constexpr uint32_t FOCAL_SCALE_FLAG = 1u << 22;
+static constexpr uint32_t TEXTURED_SCALE_FLAGS = STEP_SCALE_FLAG | FOCAL_SCALE_FLAG;
 static_assert((TEXTURED_SCALE_FLAGS & DDA_MAX) == 0 && TEXTURED_SCALE_FLAGS < (1u << 24), "");
 
 static uint8_t badger_step_palette[256];
-static lighttable_t badger_monster_colormap[256];
+static lighttable_t badger_focal_colormap[256];
 
 static void init_badger_column_palettes() {
     static bool initialized;
@@ -308,9 +308,10 @@ static void init_badger_column_palettes() {
         // original texture detail and distance/sector lighting still visible.
         unsigned target = tones[i] + (255 - tones[i]) * 3 / 8;
         badger_step_palette[i] = nearest[target];
-        // Use the original texel's tone, not sector light: dark features
-        // remain legible against the predominantly bright sprite (75% or white).
-        badger_monster_colormap[i] = nearest[tones[i] < 50 ? 0 : tones[i] < 78 ? 184 : 255];
+        // Retain the original texture's shading on focal objects and narrow
+        // grilles. Lift midtones without pushing them into a single white bin.
+        const unsigned tone = tones[i];
+        badger_focal_colormap[i] = nearest[tone + tone * (255 - tone) / 256];
     }
     initialized = true;
 }
@@ -964,6 +965,8 @@ void pd_add_column(pd_column_type type) {
 #if BADGER_DOOM
     if (type == PDCOL_STEP) {
         render_cols[rc_index].scale |= STEP_SCALE_FLAG;
+    } else if (pd_flag & PD_FLAG_FOCAL) {
+        render_cols[rc_index].scale |= FOCAL_SCALE_FLAG;
     }
 #endif
     render_cols[rc_index].colormap_index = dc_colormap_index;
@@ -1064,9 +1067,9 @@ void pd_add_masked_columns(uint8_t *ys, int seg_count) {
     assert(ys[1] >= ys[0]);
     render_cols[rc_index].scale = pd_flag & 2 ? 0 : iscale;
 #if BADGER_DOOM
-    if (pd_flag & PD_FLAG_MONSTER) {
+    if (pd_flag & PD_FLAG_FOCAL) {
         assert(!(pd_flag & 2) && dc_colormap_index >= 0);
-        render_cols[rc_index].scale |= MONSTER_SCALE_FLAG;
+        render_cols[rc_index].scale |= FOCAL_SCALE_FLAG;
     }
 #endif
     render_cols[rc_index].colormap_index = dc_colormap_index;
@@ -1705,7 +1708,7 @@ static inline void draw_texture_column(uint8_t *dest, const pd_column &c, const 
             col_render<true>(dest, c.yh - c.yl, pixels, frac, fracstep, colormap);
             return;
         }
-        colormap = badger_monster_colormap;
+        colormap = badger_focal_colormap;
     }
 #endif
     col_render(dest, c.yh - c.yl, pixels, frac, fracstep, colormap);

@@ -445,6 +445,21 @@ static int	st_randomnumber;
 
 #if !NO_USE_ST
 
+#if BADGER_DOOM
+unsigned ST_BadgerFaceHandle(void)
+{
+    unsigned face = st_faceindex;
+    if (face < ST_GODFACE)
+    {
+        unsigned pose = face % ST_FACESTRIDE;
+        // Idle eye movement would keep a still e-paper frame from settling.
+        if (pose < ST_NUMSTRAIGHTFACES)
+            face -= pose;
+    }
+    return faces[face];
+}
+#endif
+
 void ST_refreshBackground(void)
 {
 #if !DOOM_TINY

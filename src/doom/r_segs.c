@@ -514,6 +514,9 @@ void R_RenderSegLoop(void) {
 #if !USE_WHD
                 R_DrawMaskedColumn(col);
 #else
+#if BADGER_DOOM
+                if (!fixedcolormap) pd_flag |= PD_FLAG_FOCAL;
+#endif
                 if (col.real_id < 0) {
                     R_DrawMaskedColumn(col);
                 } else {
@@ -528,6 +531,9 @@ void R_RenderSegLoop(void) {
                     dc_source = col;
                     pd_add_column2(PDCOL_MID);
                 }
+#if BADGER_DOOM
+                pd_flag &= ~PD_FLAG_FOCAL;
+#endif
 #endif
 #endif
             }
@@ -865,10 +871,18 @@ R_StoreWallRange
         if (!fixedcolormap) {
             lightnum = (frontsector->lightlevel >> LIGHTSEGSHIFT) + extralight;
 
+#if BADGER_DOOM
+            // Keep differently angled faces distinct even when the same
+            // material wraps round a bend. Anchor the gradient in the map.
+            const unsigned normal = (rw_normalangle >> 24) & 127;
+            const unsigned folded = normal <= 64 ? normal : 128 - normal;
+            lightnum += 2 - (int)((folded + 8) >> 4);
+#else
             if (line_is_horiz(seg_linedef(curline)))
                 lightnum--;
             else if (line_is_vert(seg_linedef(curline)))
                 lightnum++;
+#endif
 
             if (lightnum < 0)
                 walllights = wallscalelight[0];
