@@ -33,7 +33,12 @@
 #include "m_config.h"
 #include "hardware/uart.h"
 #include <stdlib.h>
-#if USB_SUPPORT
+#if BADGER_DOOM
+#include "badger_input.h"
+#include "doom/doomstat.h"
+#include "m_controls.h"
+#include "pico/time.h"
+#elif USB_SUPPORT
 #include "pico/binary_info.h"
 #include "tusb.h"
 #include "hardware/irq.h"
@@ -471,6 +476,7 @@ void I_BindInputVariables(void)
 #define WITH_SHIFT 0x8000
 #endif
 
+#if !BADGER_DOOM
 static void pico_key_down(int scancode, int keysym, int modifiers) {
     event_t event;
     event.type = ev_keydown;
@@ -504,6 +510,7 @@ static void pico_key_up(int scancode, int keysym, int modifiers) {
         D_PostEvent(&event);
     }
 }
+#endif
 
 #if PICO_NO_HARDWARE
 static void pico_quit(void) {
@@ -511,8 +518,240 @@ static void pico_quit(void) {
 }
 #endif
 
+#if BADGER_DOOM
+// Universe Badger Doom controls:
+//   Play: UP/DOWN move, A/C turn, B fires, UP+DOWN uses/opens.
+//   Hold A+C, then press B to cycle weapons, UP to toggle the automap,
+//   or DOWN to pause. Release both without choosing a shortcut to open the menu.
+//   Automap: A+C then B toggles follow. UP/DOWN/A/C pan with follow off;
+//   B zooms in and UP+DOWN zooms out.
+//   Menus: UP/DOWN select, A/C adjust, B enters, UP+DOWN backs out one level,
+//   A+C closes the menu. On prompts B means yes, either chord means no.
+//   Save name: keep the existing name or default to the current map name;
+//   B accepts, either chord cancels. Load uses normal slot navigation.
+//   Chord members are suppressed until both have been released.
+
+extern int messageToPrint;
+#if !NO_USE_SAVE
+extern isb_int8_t stringEntry;
+extern isb_int8_t stringEntryIndex;
+#endif
+
+typedef enum {
+    BADGER_PLAY,
+    BADGER_MAP,
+    BADGER_MENU,
+    BADGER_PROMPT,
+    BADGER_NAME,
+} badger_mode_t;
+
+typedef struct {
+    uint32_t since;
+    badger_buttons_t pending;
+    bool sent;
+    bool latched;
+    bool held;
+} badger_chord_t;
+
+enum {
+    BADGER_LR_CHORD = BADGER_BUTTON_A | BADGER_BUTTON_C,
+    BADGER_UD_CHORD = BADGER_BUTTON_UP | BADGER_BUTTON_DOWN,
+    BADGER_CHORD_GRACE_US = 30000,
+};
+
+static void BadgerPostKey(int key, bool down)
+{
+    if (key != 0) {
+        const int ch = down && key >= 32 && key < 127 ? key : 0;
+        event_t ev = {
+            .type = down ? ev_keydown : ev_keyup,
+            .data1 = key,
+            .data2 = ch,
+            .data3 = text_input_enabled ? ch : 0,
+        };
+        D_PostEvent(&ev);
+    }
+}
+
+static void BadgerTapKey(int key)
+{
+    BadgerPostKey(key, true);
+    BadgerPostKey(key, false);
+}
+
+static badger_mode_t BadgerMode(void)
+{
+#if !NO_USE_SAVE
+    if (stringEntry)
+        return BADGER_NAME;
+#endif
+    if (messageToPrint)
+        return BADGER_PROMPT;
+    if (menuactive)
+        return BADGER_MENU;
+    return automapactive ? BADGER_MAP : BADGER_PLAY;
+}
+
+// Give the other member time to settle before emitting a single direction;
+// preserve a short solo tap if it ends within this window.
+static badger_buttons_t BadgerChord(badger_chord_t *chord, badger_buttons_t buttons,
+                                    badger_buttons_t mask, uint32_t now)
+{
+    buttons &= mask;
+    if (chord->latched) {
+        if (!buttons)
+            *chord = (badger_chord_t) {0};
+        else if (buttons != mask)
+            chord->held = false;
+        return 0;
+    }
+    if (buttons == mask) {
+        chord->latched = chord->held = true;
+        return 0;
+    }
+    if (buttons != chord->pending) {
+        const badger_buttons_t tap = chord->sent ? 0 : chord->pending;
+        *chord = (badger_chord_t) {.since = now, .pending = buttons};
+        return tap;
+    }
+    if (buttons && now - chord->since >= BADGER_CHORD_GRACE_US) {
+        chord->sent = true;
+        return buttons;
+    }
+    return 0;
+}
+
+// Each gameplay poll can produce at most three held keys (one per axis plus
+// fire). Releases come first; a reassigned key must not be left down.
+static void BadgerHoldKeys(int vertical, int horizontal, int action)
+{
+    static int held[3];
+    const int keys[] = {vertical, horizontal, action};
+    for (unsigned i = 0; i < count_of(keys); ++i) {
+        if (held[i] != keys[i])
+            BadgerPostKey(held[i], false);
+    }
+    for (unsigned i = 0; i < count_of(keys); ++i) {
+        if (held[i] != keys[i])
+            BadgerPostKey(keys[i], true);
+        held[i] = keys[i];
+    }
+}
+
+static void BadgerPollDoom(void)
+{
+    static badger_mode_t previous_mode;
+    static gamestate_t previous_gamestate;
+    static badger_buttons_t blocked, previous_buttons, previous_single;
+    static badger_chord_t lr, ud;
+    static bool command_used;
+
+    if (at_exit_screen)
+        return;
+
+    const badger_buttons_t physical = badger_buttons_poll();
+    const badger_mode_t mode = BadgerMode();
+    blocked &= physical;
+    if (mode != previous_mode || gamestate != previous_gamestate) {
+        BadgerHoldKeys(0, 0, 0);
+        blocked = physical;
+        previous_buttons = previous_single = 0;
+        lr = ud = (badger_chord_t) {0};
+        command_used = false;
+#if !NO_USE_SAVE
+        if (mode == BADGER_NAME && previous_mode != BADGER_NAME && !stringEntryIndex) {
+            const char episode_name[] = {'E', '0' + gameepisode, 'M', '0' + gamemap, 0};
+            const char map_name[] = {'M', 'A', 'P', '0' + gamemap / 10, '0' + gamemap % 10, 0};
+            const char *name = gamemode == commercial ? map_name : episode_name;
+            // These are text input, consumed by the save editor, not held
+            // game keys. One event per character fits the small event queue.
+            while (*name)
+                BadgerPostKey(*name++, true);
+        }
+#endif
+        previous_mode = mode;
+        previous_gamestate = gamestate;
+        return;
+    }
+
+    const uint32_t now = time_us_32();
+    const badger_buttons_t buttons = physical & ~blocked;
+    const badger_buttons_t pressed = buttons & ~previous_buttons;
+    previous_buttons = buttons;
+    const bool was_lr = lr.latched, was_ud = ud.latched;
+    const badger_buttons_t horizontal = BadgerChord(&lr, buttons, BADGER_LR_CHORD, now);
+    const badger_buttons_t vertical = BadgerChord(&ud, buttons, BADGER_UD_CHORD, now);
+    const badger_buttons_t single = horizontal | vertical | (buttons & BADGER_BUTTON_B);
+    const badger_buttons_t tapped = single & ~previous_single;
+    previous_single = single;
+    const bool lr_started = lr.latched && !was_lr;
+    const bool ud_started = ud.latched && !was_ud;
+
+    if (mode == BADGER_PLAY || mode == BADGER_MAP) {
+        if (lr.latched || was_lr) {
+            BadgerHoldKeys(0, 0, 0);
+            if (lr_started)
+                command_used = false;
+            if (!command_used && lr.held && !lr_started && pressed) {
+                int command = 0;
+                if (pressed & BADGER_BUTTON_B) {
+                    if (mode == BADGER_MAP) {
+                        command = key_map_follow;
+                    } else {
+                        if (!key_nextweapon)
+                            key_nextweapon = KEY_HOME;
+                        command = key_nextweapon;
+                    }
+                } else if (pressed & BADGER_BUTTON_UP) {
+                    command = key_map_toggle;
+                } else if (pressed & BADGER_BUTTON_DOWN) {
+                    command = key_pause;
+                }
+                BadgerTapKey(command);
+                command_used = command != 0;
+            }
+            if (!lr.latched) {
+                if (!command_used)
+                    BadgerTapKey(key_menu_activate);
+                blocked |= physical;
+                ud = (badger_chord_t) {0};
+            }
+            return;
+        }
+
+        const bool map = mode == BADGER_MAP;
+        BadgerHoldKeys(
+            ud.held ? (map ? key_map_zoomout : key_use)
+                : vertical & BADGER_BUTTON_UP ? (map ? key_map_north : key_up)
+                : vertical & BADGER_BUTTON_DOWN ? (map ? key_map_south : key_down) : 0,
+            horizontal & BADGER_BUTTON_A ? (map ? key_map_west : key_left)
+                : horizontal & BADGER_BUTTON_C ? (map ? key_map_east : key_right) : 0,
+            buttons & BADGER_BUTTON_B ? (map ? key_map_zoomin : key_fire) : 0);
+        return;
+    }
+
+    // One menu action per poll, so an input sampled for one menu cannot also
+    // select something in the next menu before its input mode is observed.
+    if (lr_started || ud_started) {
+        BadgerTapKey(mode == BADGER_NAME ? KEY_ESCAPE
+                   : mode == BADGER_PROMPT ? key_menu_abort
+                   : lr_started ? key_menu_activate : key_menu_back);
+    } else if (tapped & BADGER_BUTTON_B) {
+        BadgerTapKey(mode == BADGER_NAME ? KEY_ENTER
+                   : mode == BADGER_PROMPT ? key_menu_confirm : key_menu_forward);
+    } else if (mode == BADGER_MENU) {
+        BadgerTapKey(tapped & BADGER_BUTTON_UP ? key_menu_up
+                   : tapped & BADGER_BUTTON_DOWN ? key_menu_down
+                   : tapped & BADGER_BUTTON_A ? key_menu_left
+                   : tapped & BADGER_BUTTON_C ? key_menu_right : 0);
+    }
+}
+#endif
+
 void I_InputInit(void) {
-#if PICO_NO_HARDWARE
+#if BADGER_DOOM
+    badger_buttons_init();
+#elif PICO_NO_HARDWARE
     platform_key_down = pico_key_down;
     platform_key_up = pico_key_up;
     platform_quit = pico_quit;
@@ -523,14 +762,16 @@ void I_InputInit(void) {
 }
 
 void I_GetEvent() {
-#if USB_SUPPORT
+#if USB_SUPPORT && !BADGER_DOOM
     tuh_task();
 #endif
     return I_GetEventTimeout(50);
 }
 
 void I_GetEventTimeout(int key_timeout) {
-#if PICO_ON_DEVICE && !NO_USE_UART
+#if BADGER_DOOM
+    BadgerPollDoom();
+#elif PICO_ON_DEVICE && !NO_USE_UART
     if (uart_is_readable(uart_default)) {
         char c = uart_getc(uart_default);
         if (c == 26 && uart_is_readable_within_us(uart_default, key_timeout)) {
@@ -576,7 +817,7 @@ void I_GetEventTimeout(int key_timeout) {
 #endif
 }
 
-#if USB_SUPPORT
+#if USB_SUPPORT && !BADGER_DOOM
 
 #define MAX_REPORT  4
 #define debug_printf(fmt,...) ((void)0)

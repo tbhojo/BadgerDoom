@@ -43,22 +43,30 @@
 #include "w_wad.h"
 #include "z_zone.h"
 
+#if BADGER_DOOM
+#include "badger_display.h"
+
+// ITU-R BT.601 luma, stored in the compositor's existing 16-bit pixels.
+#define DOOM_RGB(r, g, b) (((77 * (r) + 150 * (g) + 29 * (b)) + 128) >> 8)
+#else
 #include "pico/scanvideo.h"
 #include "pico/scanvideo/composable_scanline.h"
+#include "video_doom.pio.h"
+#define DOOM_RGB(r, g, b) PICO_SCANVIDEO_PIXEL_FROM_RGB8(r, g, b)
+#endif
 #include "pico/multicore.h"
 #include "pico/sync.h"
 #include "pico/time.h"
 #include "hardware/gpio.h"
 #include "picodoom.h"
-#include "video_doom.pio.h"
 #include "image_decoder.h"
-#if PICO_ON_DEVICE
+#if PICO_ON_DEVICE && !BADGER_DOOM
 #include "hardware/dma.h"
 #include "hardware/structs/xip_ctrl.h"
 #endif
 
 #define YELLOW_SUBMARINE 0
-#define SUPPORT_TEXT 1
+#define SUPPORT_TEXT (!BADGER_DOOM)
 #if SUPPORT_TEXT
 typedef struct __packed {
     const char * const name;
@@ -91,7 +99,7 @@ static uint16_t ega_colors[] = {
 
 // todo temproarly turned this off because it causes a seeming bug in scanvideo (perhaps only with the new callback stuff) where the last repeated scanline of a pixel line is freed while shown
 //  note it may just be that this happens anyway, but usually we are writing slower than the beam?
-#define USE_INTERP PICO_ON_DEVICE
+#define USE_INTERP (PICO_ON_DEVICE && !BADGER_DOOM)
 #if USE_INTERP
 #include "hardware/interp.h"
 #endif
@@ -141,6 +149,7 @@ static uint32_t *text_scanline_buffer_start;
 static uint8_t *text_screen_cpy;
 static uint8_t *text_font_cpy;
 
+#if !BADGER_DOOM
 #if USE_1280x1024x60
 //static uint32_t missing_scanline_data[] = {
 //        video_doom_offset_raw_1p | (0 << 16u),
@@ -241,6 +250,7 @@ const scanvideo_mode_t vga_mode_320x200_60 =
 
 #define VGA_MODE vga_mode_320x200_60
 #endif
+#endif
 
 #if USE_INTERP
 static interp_hw_save_t interp0_save, interp1_save;
@@ -300,9 +310,11 @@ void I_SetPaletteNum(int doompalette)
 //
 // I_FinishUpdate
 //
+#if !BADGER_DOOM
 void I_FinishUpdate (void)
 {
 }
+#endif
 
 uint8_t display_frame_index;
 uint8_t display_overlay_index;
@@ -335,7 +347,9 @@ uint8_t *next_video_scroll;
 uint8_t *video_scroll;
 #endif
 volatile uint8_t wipe_min;
+#if SUPPORT_TEXT
 uint32_t *saved_scanline_buffer_ptrs[PICO_SCANVIDEO_SCANLINE_BUFFER_COUNT];
+#endif
 
 #pragma GCC push_options
 #if PICO_ON_DEVICE
@@ -563,6 +577,9 @@ static void __scratch_x("scanlines") scanline_func_double(uint32_t *dest, int sc
         palette_convert_scanline(dest, src);
     } else {
         // we expect everything to be overdrawn by statusbar so we do nothing
+#if BADGER_DOOM
+        memset(dest, 0, SCREENWIDTH * sizeof(uint16_t));
+#endif
     }
 }
 
@@ -748,7 +765,7 @@ static inline uint draw_vpatch(uint16_t *dest, patch_t *patch, vpatchlist_t *vp,
         assert(sp < NUM_SHARED_PALETTES);
         switch (vpatch_type(patch)) {
             case vp4_solid: {
-#if PICO_ON_DEVICE
+#if PICO_ON_DEVICE && !BADGER_DOOM
                 if (patch == stbar) {
                     static const uint8_t *cached_data;
 #if PICO_RP2040
@@ -890,7 +907,7 @@ void __noinline new_frame_init_overlays_palette_and_wipe() {
                         g = gammatable[usegamma-1][g];
                         b = gammatable[usegamma-1][b];
                     }
-                    palette[i] = PICO_SCANVIDEO_PIXEL_FROM_RGB8(r, g, b);
+                    palette[i] = DOOM_RGB(r, g, b);
                 }
             } else {
                 int mul, r0, g0, b0;
@@ -912,7 +929,7 @@ void __noinline new_frame_init_overlays_palette_and_wipe() {
                     r += ((r0 - r) * mul) >> 16;
                     g += ((g0 - g) * mul) >> 16;
                     b += ((b0 - b) * mul) >> 16;
-                    palette[i] = PICO_SCANVIDEO_PIXEL_FROM_RGB8(r, g, b);
+                    palette[i] = DOOM_RGB(r, g, b);
                 }
             }
             next_pal = -1;
@@ -980,6 +997,97 @@ void __no_inline_not_in_flash_func(new_frame_stuff)() {
     }
 }
 
+// Overlay source offsets advance on each row, even when a backend downsamples it.
+static inline void compose_scanline(uint32_t *dest, int scanline) {
+    scanline_funcs[display_video_type](dest, scanline);
+    if (display_video_type < FIRST_VIDEO_TYPE_WITH_OVERLAYS) {
+        return;
+    }
+    assert(scanline < count_of(vpatchlists->vpatch_starters));
+    int prev = 0;
+    for (int vp = vpatchlists->vpatch_starters[scanline]; vp;) {
+        int next = vpatchlists->vpatch_next[vp];
+        while (vpatchlists->vpatch_next[prev] && vpatchlists->vpatch_next[prev] < vp) {
+            prev = vpatchlists->vpatch_next[prev];
+        }
+        assert(vpatchlists->vpatch_next[prev] != vp);
+        vpatchlists->vpatch_next[vp] = vpatchlists->vpatch_next[prev];
+        vpatchlists->vpatch_next[prev] = vp;
+        prev = vp;
+        vp = next;
+    }
+    vpatchlist_t *overlays = vpatchlists->overlays[display_overlay_index];
+    prev = 0;
+    for (int vp = vpatchlists->vpatch_next[prev]; vp; vp = vpatchlists->vpatch_next[vp]) {
+        patch_t *patch = resolve_vpatch_handle(overlays[vp].entry.patch_handle);
+        int yoff = scanline - overlays[vp].entry.y;
+        if (yoff < vpatch_height(patch)) {
+            vpatchlists->vpatch_doff[vp] = draw_vpatch((uint16_t *)dest, patch, &overlays[vp],
+                                                     vpatchlists->vpatch_doff[vp]);
+            prev = vp;
+        } else {
+            vpatchlists->vpatch_next[prev] = vpatchlists->vpatch_next[vp];
+        }
+    }
+}
+
+#if BADGER_DOOM
+void I_FinishUpdate(void) {
+    static const uint8_t bayer[4][4] = {
+        { 8, 136,  40, 168},
+        {200, 72, 232, 104},
+        { 56, 184,  24, 152},
+        {248, 120, 216,  88},
+    };
+    static uint8_t frames[2][BADGER_FRAME_BYTES];
+    static unsigned next;
+    static bool submitted;
+    static uint32_t scanline[SCREENWIDTH / 2];
+    static uint16_t sum[BADGER_WIDTH];
+
+    // Sampling is on core 0 between game frames. Core 1 only draws geometry;
+    // the panel refreshes on its own while both cores render the next frame.
+    new_frame_stuff();
+    if (!badger_display_ready() || display_video_type < FIRST_VIDEO_TYPE_WITH_OVERLAYS) {
+        return;
+    }
+
+    uint8_t *out = frames[next];
+    const uint16_t *pixels = (const uint16_t *)scanline;
+    int source_y = 0;
+    for (int y = 0; y < BADGER_HEIGHT; ++y) {
+        const int last_y = (y + 1) * SCREENHEIGHT / BADGER_HEIGHT;
+        const int rows = last_y - source_y;
+        compose_scanline(scanline, source_y++);
+        for (int x = 0; x < BADGER_WIDTH; ++x) {
+            sum[x] = pixels[(2 * x + 1) * SCREENWIDTH / (2 * BADGER_WIDTH)];
+        }
+        if (source_y < last_y) {
+            compose_scanline(scanline, source_y++);
+            for (int x = 0; x < BADGER_WIDTH; ++x) {
+                sum[x] += pixels[(2 * x + 1) * SCREENWIDTH / (2 * BADGER_WIDTH)];
+            }
+        }
+        const uint8_t *threshold = bayer[y & 3];
+        for (int x = 0; x < BADGER_WIDTH;) {
+            uint8_t bits = 0;
+            for (int bit = 0; bit < 8; ++bit, ++x) {
+                bits = (bits << 1) | (sum[x] >= rows * threshold[x & 3]);
+            }
+            *out++ = bits;
+        }
+    }
+
+    if (!submitted || memcmp(frames[next], frames[next ^ 1], BADGER_FRAME_BYTES)) {
+        badger_display_submit(frames[next]);
+        next ^= 1;
+        if (!submitted) {
+            puts("Badger Doom: first game frame sent to panel");
+            submitted = true;
+        }
+    }
+}
+#else
 void __scratch_x("scanlines") fill_scanlines() {
 #if SUPPORT_TEXT
     struct scanvideo_scanline_buffer *buffer = scanvideo_begin_scanline_generation_linked(display_video_type == VIDEO_TYPE_TEXT ? 2 : 1, false);
@@ -1004,36 +1112,7 @@ void __scratch_x("scanlines") fill_scanlines() {
         if (display_video_type != VIDEO_TYPE_TEXT) {
             // we don't have text mode -> normal transition yet, but we may for network game, so leaving this here - we would need to put the buffer pointers back
             assert (buffer->data < text_scanline_buffer_start || buffer->data >= text_scanline_buffer_start + TEXT_SCANLINE_BUFFER_TOTAL_WORDS);
-            scanline_funcs[display_video_type](buffer->data+1, scanline);
-            if (display_video_type >= FIRST_VIDEO_TYPE_WITH_OVERLAYS) {
-                assert(scanline < count_of(vpatchlists->vpatch_starters));
-                int prev = 0;
-                for (int vp = vpatchlists->vpatch_starters[scanline]; vp;) {
-                    int next = vpatchlists->vpatch_next[vp];
-                    while (vpatchlists->vpatch_next[prev] && vpatchlists->vpatch_next[prev] < vp) {
-                        prev = vpatchlists->vpatch_next[prev];
-                    }
-                    assert(prev != vp);
-                    assert(vpatchlists->vpatch_next[prev] != vp);
-                    vpatchlists->vpatch_next[vp] = vpatchlists->vpatch_next[prev];
-                    vpatchlists->vpatch_next[prev] = vp;
-                    prev = vp;
-                    vp = next;
-                }
-                vpatchlist_t *overlays = vpatchlists->overlays[display_overlay_index];
-                prev = 0;
-                for (int vp = vpatchlists->vpatch_next[prev]; vp; vp = vpatchlists->vpatch_next[prev]) {
-                    patch_t *patch = resolve_vpatch_handle(overlays[vp].entry.patch_handle);
-                    int yoff = scanline - overlays[vp].entry.y;
-                    if (yoff < vpatch_height(patch)) {
-                        vpatchlists->vpatch_doff[vp] = draw_vpatch((uint16_t*)(buffer->data + 1), patch, &overlays[vp],
-                                                                   vpatchlists->vpatch_doff[vp]);
-                        prev = vp;
-                    } else {
-                        vpatchlists->vpatch_next[prev] = vpatchlists->vpatch_next[vp];
-                    }
-                }
-            }
+            compose_scanline(buffer->data + 1, scanline);
             uint16_t *p = (uint16_t *) buffer->data;
             p[0] = video_doom_offset_raw_run;
             p[1] = p[2];
@@ -1085,9 +1164,13 @@ static void __not_in_flash_func(free_buffer_callback)() {
 #endif
 }
 #endif
+#endif
 
 //static semaphore_t init_sem;
 static void core1() {
+#if BADGER_DOOM
+    multicore_lockout_victim_init();
+#else
 #if !PICO_ON_DEVICE
     void simulate_video_pio_video_doom(const uint32_t *dma_data, uint32_t dma_data_size,
                                        uint16_t *pixel_buffer, int32_t max_pixels, int32_t expected_width, bool overlay);
@@ -1104,6 +1187,7 @@ static void core1() {
 #if PICO_ON_DEVICE
     irq_set_pending(LOW_PRIO_IRQ);
 #endif
+#endif
     sem_release(&core1_launch);
     while (true) {
         pd_core1_loop();
@@ -1115,11 +1199,17 @@ static void core1() {
     }
 }
 
-#if PICO_RP2350
+#if PICO_RP2350 && !BADGER_DOOM
 #include "hardware/structs/accessctrl.h"
 #endif
 void I_InitGraphics(void)
 {
+#if BADGER_DOOM
+    if (!badger_display_init()) {
+        panic("Badger Doom: panel initialization timed out");
+    }
+    puts("Badger Doom: initial panel refresh complete");
+#endif
     stbar = resolve_vpatch_handle(VPATCH_STBAR);
     sem_init(&render_frame_ready, 0, 2);
     sem_init(&display_frame_freed, 1, 2);
@@ -1131,7 +1221,7 @@ void I_InitGraphics(void)
 #if USE_ZONE_FOR_MALLOC
     disallow_core1_malloc = true;
 #endif
-#if PICO_RP2350
+#if PICO_RP2350 && !BADGER_DOOM
     hw_set_bits(&accessctrl_hw->xip_ctrl, ACCESSCTRL_PASSWORD_BITS | 0xff);
 #endif
     initialized = true;
@@ -1386,7 +1476,7 @@ void I_DisplayFPSDots(boolean dots_on)
 {
 }
 
-#if PICO_ON_DEVICE
+#if PICO_ON_DEVICE && !BADGER_DOOM
 bool video_doom_adapt_for_mode(const struct scanvideo_pio_program *program, const struct scanvideo_mode *mode,
                                struct scanvideo_scanline_buffer *missing_scanvideo_scanline_buffer, uint16_t *modifiable_instructions) {
     missing_scanvideo_scanline_buffer->data = missing_scanline_data;
@@ -1399,7 +1489,7 @@ pio_sm_config video_doom_configure_pio(pio_hw_t *pio, uint sm, uint offset) {
     scanvideo_default_configure_pio(pio, sm, offset, &config, false);
     return config;
 }
-#else
+#elif !PICO_ON_DEVICE
 void simulate_video_pio_video_doom(const uint32_t *dma_data, uint32_t dma_data_size,
                                    uint16_t *pixel_buffer, int32_t max_pixels, int32_t expected_width, bool overlay) {
     const uint16_t *it = (uint16_t *) dma_data;

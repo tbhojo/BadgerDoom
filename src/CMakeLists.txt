@@ -119,10 +119,14 @@ target_sources(game INTERFACE
     w_merge.c           w_merge.h
     z_zone.c            z_zone.h
 
-    i_oplmusic.c
     i_sound.c
 
 )
+
+if (NOT BADGER_DOOM)
+    target_sources(game INTERFACE i_oplmusic.c)
+    target_link_libraries(game INTERFACE opl)
+endif()
 
 if (NOT PICO_SDK)
     add_library(game_sdl INTERFACE)
@@ -168,7 +172,7 @@ if(MSVC)
          "../win32/win_opendir.c" "../win32/win_opendir.h")
 endif()
 
-target_link_libraries(game INTERFACE common opl)
+target_link_libraries(game INTERFACE common)
 
 add_library(game_deh INTERFACE)
 target_sources(game_deh INTERFACE
@@ -475,9 +479,11 @@ function(add_doom_tiny SUFFIX RENDER_LIB)
 
     target_sources(doom_tiny${SUFFIX} PRIVATE
             tiny_huff.c
-            musx_decoder.c
             image_decoder.c
             )
+    if (NOT BADGER_DOOM)
+        target_sources(doom_tiny${SUFFIX} PRIVATE musx_decoder.c)
+    endif()
     target_include_directories(doom_tiny${SUFFIX} PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/../")
     target_link_libraries(doom_tiny${SUFFIX} PRIVATE doom ${EXTRA_LIBS})
 
@@ -500,21 +506,10 @@ function(add_doom_tiny SUFFIX RENDER_LIB)
 
         #NO_DRAW_MENU=1
         # SDK minimilization
-        PICO_TIME_DEFAULT_ALARM_POOL_DISABLED=1
-        PICO_TIME_DEFAULT_ALARM_POOL_MAX_TIMERS=1
-        PICO_DISABLE_SHARED_IRQ_HANDLERS=1
         PICO_USE_OPTIMISTIC_SBRK=1
 
-        # MUSIC
-        USE_EMU8950_OPL=1
-        USE_DIRECT_MIDI_LUMP=1
 
         NO_USE_NET=1 # standard networking
-        USE_PICO_NET=1
-        # for vgaboard
-        PICO_DEFAULT_I2C=1
-        PICO_DEFAULT_I2C_SDA_PIN=18
-        PICO_DEFAULT_I2C_SCL_PIN=19
 
         #NO_USE_LOAD=1
         #NO_USE_SAVE=1
@@ -549,8 +544,6 @@ function(add_doom_tiny SUFFIX RENDER_LIB)
         FLOOR_CEILING_CLIP_8BIT=1
 
 #        NO_USE_WI=1
-        USE_MUSX=1
-        MUSX_COMPRESSED=1
 
         NO_SCREENSHOT=1
 
@@ -565,11 +558,33 @@ function(add_doom_tiny SUFFIX RENDER_LIB)
         USE_MEMORY_WAD=1
         PICO_DEBUG_MALLOC=1
         EMU8950_NO_RATECONV=1
-
-        PICO_CORE1_STACK_SIZE=0x4f8
-
-        NO_IERROR=1
     )
+    if (BADGER_DOOM)
+        target_compile_definitions(doom_tiny${SUFFIX} PRIVATE
+                NO_USE_ENDDOOM=1
+                PICO_STDIO_USB_CONNECT_WAIT_TIMEOUT_MS=750
+                PICO_STACK_SIZE=0x1000
+                PICO_CORE1_STACK_SIZE=0xc00
+                )
+        pico_enable_stdio_uart(doom_tiny${SUFFIX} 0)
+        pico_enable_stdio_usb(doom_tiny${SUFFIX} 1)
+    else()
+        target_compile_definitions(doom_tiny${SUFFIX} PRIVATE
+                PICO_TIME_DEFAULT_ALARM_POOL_DISABLED=1
+                PICO_TIME_DEFAULT_ALARM_POOL_MAX_TIMERS=1
+                PICO_DISABLE_SHARED_IRQ_HANDLERS=1
+                USE_EMU8950_OPL=1
+                USE_DIRECT_MIDI_LUMP=1
+                PICO_CORE1_STACK_SIZE=0x4f8
+                USE_PICO_NET=1
+                PICO_DEFAULT_I2C=1
+                PICO_DEFAULT_I2C_SDA_PIN=18
+                PICO_DEFAULT_I2C_SCL_PIN=19
+                USE_MUSX=1
+                MUSX_COMPRESSED=1
+                NO_IERROR=1
+                )
+    endif()
     if (PICO_ON_DEVICE)
         target_compile_options(doom_tiny${SUFFIX} PRIVATE -fno-common -fdata-sections -Wl,--sort-section=alignment)
         target_compile_definitions(doom_tiny${SUFFIX} PRIVATE
@@ -635,10 +650,19 @@ if (PICO_SDK)
             NO_USE_FINALE_CAST=1
             NO_USE_FINALE_BUNNY=1
     )
+    set(tiny_wad_address 0x10040000)
     target_compile_definitions(doom_tiny PRIVATE
-            TINY_WAD_ADDR=0x10040000
+            TINY_WAD_ADDR=${tiny_wad_address}
     )
     target_link_libraries(doom_tiny PRIVATE tiny_settings)
+    if (BADGER_DOOM)
+        set(layout "${CMAKE_CURRENT_LIST_DIR}/pico/badger_layout.ld")
+        target_link_options(doom_tiny PRIVATE
+                "LINKER:--defsym=__badger_whx_start=${tiny_wad_address}"
+                "LINKER:--script=${layout}")
+        pico_add_link_depend(doom_tiny "${layout}")
+        return()
+    endif()
     add_doom_tiny(_nost render_newhope)
 
     target_compile_definitions(doom_tiny_nost PRIVATE

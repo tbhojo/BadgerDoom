@@ -1,3 +1,7 @@
+if (BADGER_DOOM)
+    return()
+endif()
+
 if (PICO_SDK)
     add_library(opl INTERFACE)
     target_sources(opl INTERFACE

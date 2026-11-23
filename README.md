@@ -16,6 +16,65 @@ This chocolate-doom commit that the code is branched off can be found in the `up
 
 The original Chocolate Doom README is [here](README-chocolate.md).
 
+## GitHub Universe 2024 Badger
+
+The `github_universe_badger` board builds `doom_tiny` for the **RP2350A** badge
+with the **296×128 monochrome E-Ink panel**. It keeps Doom's game timing and
+renders the entire view, status bar, and menus to the UC8151 panel. The panel
+sets the visible frame rate (about two refreshes per second on the tested
+badge). The port is single-player and silent; USB is for diagnostics and
+reflashing, not keyboard input.
+
+### Build and install
+
+Use Pico SDK 2.1.1 or newer with the SDK's TinyUSB submodule initialized,
+Arm GNU Toolchain 13.2.Rel1, and a separate CMake build directory. Pico Extras
+is not needed.
+
+```sh
+cmake -S . -B build-badger -DCMAKE_BUILD_TYPE=MinSizeRel \
+  -DPICO_BOARD=github_universe_badger -DPICO_SDK_PATH="$HOME/pico-sdk"
+cmake --build build-badger --target doom_tiny
+```
+
+Enter BOOTSEL and confirm `picotool info -a` identifies an RP2350 with 4 MiB
+of flash. Back up the entire flash before replacing any existing firmware.
+Keep the backup off the badge.
+
+```sh
+picotool save -a badger-backup.bin
+picotool load -u -v -t bin doom1.whx -o 0x10040000
+picotool load -u -v -x build-badger/src/doom_tiny.uf2
+```
+
+`doom1.whx` is the included Doom shareware data. Skip its load if
+`picotool verify -t bin doom1.whx -o 0x10040000` already succeeds. The linker
+keeps the firmware below the WHX slot. On-badge saves use flash offsets
+`0x200000`–`0x2fffff`; they do not touch the firmware, WHX, or top MiB.
+
+On boot the panel clears, then shows Doom's title screen. USB CDC reports the
+boot, WHX check, panel initialization, and first frame. Once Doom is running
+you can use `picotool load -f -u -v -x build-badger/src/doom_tiny.uf2` to
+update it without touching the WHX or saves.
+
+To restore the pre-install image, reenter BOOTSEL and run
+`picotool load -v -t bin badger-backup.bin -o 0x10000000`, then
+`picotool reboot`. This restores the snapshot, including its filesystem if any,
+and replaces Doom and its saves.
+
+### Controls
+
+| Context | Buttons |
+| --- | --- |
+| Play | **Up/Down** move, **A/C** turn, **B** fires, **Up+Down** uses or opens |
+| Shortcuts | Hold **A+C**, then tap **B** for next weapon, **Up** for automap, or **Down** to pause |
+| Menu | Press and release **A+C** to open or close; **Up/Down** select, **A/C** adjust, **B** confirms, **Up+Down** goes back |
+| Prompts and saves | **B** confirms; either chord cancels. New saves default to the current map name |
+| Automap | **A+C**, then **B** toggles follow; with follow off, **Up/Down/A/C** pan. **B** zooms in, **Up+Down** zooms out |
+
+Use short taps for precise turns: input and game logic run between panel
+updates, so the screen can lag a held button.
+
 ## Code State
 
 Thus far, the focus has been entirely on getting RP2040 Doom running. Not a lot of time has been 

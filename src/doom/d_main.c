@@ -512,6 +512,9 @@ void D_RunFrame()
 #else
         do {
             D_Display();
+#if BADGER_DOOM
+            I_FinishUpdate();
+#endif
         } while (wipestate);
 #endif
     }

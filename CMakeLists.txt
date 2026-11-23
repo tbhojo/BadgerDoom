@@ -4,8 +4,15 @@ cmake_minimum_required(VERSION 3.13)
 
 # We use PICO_SDK_PATH being set as an indicator that we're doing a Pico BUILD
 if (PICO_SDK_PATH)
+    if (PICO_BOARD STREQUAL "github_universe_badger" OR
+        (NOT DEFINED PICO_BOARD AND "$ENV{PICO_BOARD}" STREQUAL "github_universe_badger"))
+        set(BADGER_DOOM ON)
+        list(APPEND PICO_BOARD_HEADER_DIRS "${CMAKE_CURRENT_SOURCE_DIR}/src/pico/boards")
+    endif()
     include(pico_sdk_import.cmake)
-    include(pico_extras_import.cmake)
+    if (NOT BADGER_DOOM)
+        include(pico_extras_import.cmake)
+    endif()
 endif()
 
 project("Chocolate Doom" VERSION 3.0.0 LANGUAGES C CXX)
@@ -18,6 +25,9 @@ if (PICO_SDK_PATH)
     # this only affects device builds device, but we want to use zone for malloc in this case so we don't have two separate elastic spaces and can fit more in
     set(SKIP_PICO_MALLOC 1)
     pico_sdk_init()
+    if (BADGER_DOOM AND NOT PICO_PLATFORM STREQUAL "rp2350-arm-s")
+        message(FATAL_ERROR "GitHub Universe Badger Doom requires PICO_PLATFORM=rp2350-arm-s")
+    endif()
     if (PICO_ON_DEVICE AND NOT CMAKE_BUILD_TYPE STREQUAL "MinSizeRel")
         message(WARNING "You should do a MinSizeRel build when targeting the RP2040
         (with -DCMAKE_BUILD_TYPE=MinSizeRel)")

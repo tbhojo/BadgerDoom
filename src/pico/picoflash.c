@@ -7,6 +7,23 @@
 // this is modified from of the Pico SDK hardware/flash.c but modified to use a user buffer for boot2_copyout and combine to a single sector erase/write function
 
 #include "picoflash.h"
+
+#if BADGER_DOOM
+static_assert(BADGER_SAVE_START_OFFSET < BADGER_SAVE_END_OFFSET &&
+              BADGER_SAVE_END_OFFSET <= PICO_FLASH_SIZE_BYTES &&
+              BADGER_SAVE_START_OFFSET % FLASH_SECTOR_SIZE == 0 &&
+              BADGER_SAVE_END_OFFSET % FLASH_SECTOR_SIZE == 0,
+              "Badger Doom save partition must fit in physical flash");
+
+void picoflash_sector_program(uint32_t flash_offs, const uint8_t *data) {
+    // The caller has stopped core 1 and masked core 0 IRQs.
+    hard_assert(flash_offs >= BADGER_SAVE_START_OFFSET &&
+                flash_offs < BADGER_SAVE_END_OFFSET &&
+                flash_offs % FLASH_SECTOR_SIZE == 0);
+    flash_range_erase(flash_offs, FLASH_SECTOR_SIZE);
+    flash_range_program(flash_offs, data, FLASH_SECTOR_SIZE);
+}
+#else
 #include "pico/bootrom.h"
 
 #define FLASH_BLOCK_ERASE_CMD 0xd8
@@ -55,3 +72,4 @@ void __no_inline_not_in_flash_func(picoflash_sector_program)(uint32_t flash_offs
     flash_flush_cache(); // Note this is needed to remove CSn IO force as well as cache flushing
     flash_enable_xip_via_boot2(boot2_copyout);
 }
+#endif

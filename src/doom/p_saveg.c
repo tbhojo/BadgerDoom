@@ -2645,6 +2645,9 @@ void P_UnArchiveSpecials (void)
 #include "picodoom.h"
 
 const uint8_t *get_end_of_flash(void) {
+#if BADGER_DOOM
+    return (const uint8_t *)(XIP_BASE + BADGER_SAVE_END_OFFSET);
+#else
     static const uint8_t *end_of_flash;
     if (!end_of_flash) {
         // look for end of flash by repeated data
@@ -2656,12 +2659,21 @@ const uint8_t *get_end_of_flash(void) {
 //        printf("FLASH SPACE %p -> %p\n", whd_map_base + whdheader->size, end_of_flash);
     }
     return end_of_flash;
+#endif
+}
+
+static const uint8_t *save_area_start(void) {
+#if BADGER_DOOM
+    return (const uint8_t *)(XIP_BASE + BADGER_SAVE_START_OFFSET);
+#else
+    return whd_map_base + whdheader->size;
+#endif
 }
 
 void P_SaveGameGetExistingFlashSlotAddresses(flash_slot_info_t *slots, int count) {
     const uint8_t *index = get_end_of_flash() - 4;
     int i;
-    const uint8_t *limit = whd_map_base + whdheader->size;
+    const uint8_t *limit = save_area_start();
     for(i=0;i<count;i++) {
         bool ok = false;
         if (index[0] == 0x53 && index[1] >= i && index[1] < count) {
@@ -2741,6 +2753,9 @@ static void __no_inline_not_in_flash_func(write_flash_elements)(const flash_writ
 boolean __noinline P_SaveGameWriteFlashSlot(int slot, const uint8_t *buffer, uint size, uint8_t *buffer4k) {
 #define MAX_SLOTS 8
 #define SLOT_OVERHEAD 8
+    if ((unsigned)slot >= MAX_SLOTS || size > UINT16_MAX) {
+        return false;
+    }
     flash_slot_info_t slots[MAX_SLOTS];
     P_SaveGameGetExistingFlashSlotAddresses(slots, count_of(slots));
     int used = 0;
@@ -2757,7 +2772,7 @@ boolean __noinline P_SaveGameWriteFlashSlot(int slot, const uint8_t *buffer, uin
             last_slot = i;
         }
     }
-    const uint8_t *limit = whd_map_base + whdheader->size;
+    const uint8_t *limit = save_area_start();
     int freespace = (get_end_of_flash() - limit) - used;
 //    printf("SPACE %d, required %d\n", freespace, size + SLOT_OVERHEAD);
     if (freespace < size + SLOT_OVERHEAD) {
@@ -2766,7 +2781,6 @@ boolean __noinline P_SaveGameWriteFlashSlot(int slot, const uint8_t *buffer, uin
     pd_start_save_pause();
 //    printf("Need to add %p->%p (+%04x)\n", prev_slot_bottom - 4 - size, prev_slot_bottom, size + 8);
     if (last_slot > slot) {
-        assert(slots[last_slot.data]);
         const uint8_t *from_top = slots[slot].data ? slots[slot].data - 4 : prev_slot_bottom;
         const uint8_t *from_bottom = slots[last_slot].data - 4;
         const uint8_t *to_top = prev_slot_bottom;

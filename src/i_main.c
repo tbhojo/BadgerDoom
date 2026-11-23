@@ -40,7 +40,7 @@
 #include "doomtype.h"
 #include "i_system.h"
 #include "m_argv.h"
-#if PICO_RP2350
+#if PICO_RP2350 && !BADGER_DOOM
 #include "hardware/structs/qmi.h"
 #endif
 //
@@ -51,7 +51,7 @@
 
 void D_DoomMain (void);
 
-#if PICO_ON_DEVICE
+#if PICO_ON_DEVICE && !BADGER_DOOM
 #include "pico/binary_info.h"
 bi_decl(bi_3pins_with_names(PICO_AUDIO_I2S_DATA_PIN, "I2S DIN", PICO_AUDIO_I2S_CLOCK_PIN_BASE, "I2S BCK", PICO_AUDIO_I2S_CLOCK_PIN_BASE+1, "I2S LRCK"));
 #endif
@@ -63,7 +63,7 @@ int main(int argc, char **argv)
     myargc = argc;
     myargv = argv;
 #endif
-#if PICO_ON_DEVICE
+#if PICO_ON_DEVICE && !BADGER_DOOM
 #if PICO_RP2350
     uint clkdiv = 3;
     uint rxdelay = 2;
@@ -90,6 +90,9 @@ int main(int argc, char **argv)
 #endif
 #if LIB_PICO_STDIO
     stdio_init_all();
+#endif
+#if BADGER_DOOM
+    puts("Badger Doom: RP2350 ARM boot");
 #endif
 #if PICO_BUILD
     I_Init();

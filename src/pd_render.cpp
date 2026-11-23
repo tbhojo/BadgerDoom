@@ -10,6 +10,9 @@
 #include "picodoom.h"
 #include "pico/sem.h"
 #include "hardware/gpio.h"
+#if BADGER_DOOM
+#include "pico/multicore.h"
+#endif
 #include "pico/divider.h"
 #include "image_decoder.h"
 #include <set>
@@ -60,7 +63,9 @@ static int16_t sub_gamestate;
 // todo look at using scratch RAM for local linked lists/buffers (we sort of have this with stack)
 
 CU_REGISTER_DEBUG_PINS(flat_decode, patch_decode, full_render, render_thing, render_flat, start_end)
+#if !BADGER_DOOM
 extern uint8_t restart_song_state;
+#endif
 
 //CU_SELECT_DEBUG_PINS(patch_decode)
 //CU_SELECT_DEBUG_PINS(render_thing)
@@ -88,7 +93,7 @@ extern "C" {
 #include "w_wad.h"
 #include "z_zone.h"
 #include "doom/r_plane.h"
-void I_UpdateSound(void);
+#include "i_sound.h"
 }
 void draw_cast_sprite(int sprite_lump);
 #pragma GCC push_options
@@ -267,6 +272,7 @@ static __aligned(4) int16_t column_heads[SCREENWIDTH * 2];
 #define fuzzy_column_heads (&column_heads[SCREENWIDTH])
 
 static void SafeUpdateSound() {
+#if !BADGER_DOOM
     boolean save = false;
     if (get_core_num()) {
         save = interp_in_use;
@@ -277,6 +283,7 @@ static void SafeUpdateSound() {
     if (get_core_num()) {
         interp_in_use = save;
     }
+#endif
 }
 
 static bool column_is_psprite(const pd_column &c) {
@@ -1289,9 +1296,11 @@ static void flush_visplanes(int8_t *flatnum_next, int numvisplanes) {
             }
             if (any) {
 #if PICO_ON_DEVICE
+#if !BADGER_DOOM
                 restart_song_state |= 1; // we may not restart a song during this call because it may blow the stack
                 SafeUpdateSound();
                 restart_song_state &= ~1;
+#endif
                 interp_init();
 #endif
 #if 0
@@ -1853,11 +1862,13 @@ static void draw_patch_columns(int patch_num, int patch_head, int16_t *col_heads
     const uint8_t *patch_decoder_table = get_patch_decoder_table(patch_num, pdi.decoder);
     for(int col = 0; col < pdi.w; col++) {
         i = col_heads[col];
+#if !BADGER_DOOM
         if (!(col & 63) && get_core_num()) {
             restart_song_state |= 1; // we may not restart a song during this call because it may blow the stack
             SafeUpdateSound();
             restart_song_state &= ~1;
         }
+#endif
         if (i != -1) {
             uint16_t col_offset = col_offsets[col];
             if (0xff == (col_offset >> 8)) {
@@ -2966,27 +2977,48 @@ void pd_core1_loop() {
 #if PICO_ON_DEVICE
     sem_acquire_blocking(&core1_wake);
 #if USE_CORE1_FOR_FLATS
+#if BADGER_DOOM
+    sem_acquire_blocking(&core1_do_flats);
+#else
     while (!sem_acquire_timeout_ms(&core1_do_flats, 1)) {
         SafeUpdateSound();
     }
+#endif
     interp_in_use = true;
     draw_visplanes(core1_fr_list);
     interp_in_use = false;
 #if USE_CORE1_FOR_REGULAR
+#if BADGER_DOOM
+    sem_acquire_blocking(&core1_do_regular);
+#else
     while (!sem_acquire_timeout_ms(&core1_do_regular, 1)) {
         SafeUpdateSound();
     }
+#endif
     draw_regular_columns(1);
 #endif
 #endif
+#if BADGER_DOOM
+    sem_acquire_blocking(&core0_done);
+#else
     while (!sem_acquire_timeout_ms(&core0_done, 1)) {
         SafeUpdateSound();
     }
+#endif
 #endif
     sem_release(&core1_done);
 }
 
 #if PICO_ON_DEVICE
+#if BADGER_DOOM
+void pd_start_save_pause(void) {
+    multicore_lockout_start_blocking();
+}
+
+void pd_end_save_pause(void) {
+    multicore_lockout_end_blocking();
+}
+#else
 extern "C" {
 #include "i_picosound.h"
 }
@@ -3019,6 +3051,7 @@ void pd_end_save_pause(void) {
         I_UpdateSound();
     }
 }
+#endif
 
 #endif
 

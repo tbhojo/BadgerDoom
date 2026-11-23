@@ -36,6 +36,11 @@
 
 #include "w_wad.h"
 
+#if BADGER_DOOM
+#include "picoflash.h"
+#include "hardware/regs/addressmap.h"
+#endif
+
 typedef PACKED_STRUCT (
 {
     // Should be "IWAD" or "PWAD".
@@ -175,6 +180,15 @@ wad_file_t *W_AddFile (const char *filename)
     numlumps = ((wadinfo_t *)whd_map_base)->numlumps;
     lump_offsets = (const uint32_t *)(whd_map_base + ((wadinfo_t *)whd_map_base)->infotableofs);
     whdheader = (const whdheader_t*)(whd_map_base + sizeof(wadinfo_t));
+#if BADGER_DOOM
+    static_assert(TINY_WAD_ADDR < XIP_BASE + BADGER_SAVE_START_OFFSET,
+                  "Badger Doom WHX slot must precede save slots");
+    if (whdheader->size < sizeof(wadinfo_t) + sizeof(*whdheader) ||
+        whdheader->size > XIP_BASE + BADGER_SAVE_START_OFFSET - TINY_WAD_ADDR) {
+        panic("Badger Doom: invalid WHX length %lu", (unsigned long)whdheader->size);
+    }
+    printf("Badger Doom: WHX header valid (%lu bytes)\n", (unsigned long)whdheader->size);
+#endif
     lump_names = (lump_name_info_t *)(whd_map_base + sizeof(wadinfo_t) + sizeof(whdheader_t) + (numlumps + 1) * 4);
 #endif
 #else
