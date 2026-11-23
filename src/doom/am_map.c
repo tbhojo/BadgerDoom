@@ -19,6 +19,7 @@
 
 
 #include <stdio.h>
+#include <stdlib.h>
 
 #include "deh_main.h"
 
@@ -155,6 +156,7 @@ static const mline_t player_arrow[] = {
 };
 #undef R
 
+#if !BADGER_DOOM
 #define R ((8*PLAYERRADIUS)/7)
 static const mline_t cheat_player_arrow[] = {
     { { -R+R/8, 0 }, { R, 0 } }, // -----
@@ -175,6 +177,7 @@ static const mline_t cheat_player_arrow[] = {
     { { R/6+R/32, -R/7-R/32 }, { R/6+R/10, -R/7 } }
 };
 #undef R
+#endif
 
 //#define R (FRACUNIT)
 //static const mline_t triangle_guy[] = {
@@ -545,9 +548,19 @@ void AM_LevelInit(void)
     AM_clearMarks();
 
     AM_findMinMaxBoundaries();
+#if BADGER_DOOM
+    // Start with nearby rooms, not the entire level. Four map units per
+    // source pixel still leave several pixels across a narrow doorway.
+    scale_mtof = FRACUNIT / 4;
+    if (scale_mtof < min_scale_mtof)
+        scale_mtof = min_scale_mtof;
+    if (scale_mtof > max_scale_mtof)
+        scale_mtof = max_scale_mtof;
+#else
     scale_mtof = FixedDiv(min_scale_mtof, (int) (0.7*FRACUNIT));
     if (scale_mtof > max_scale_mtof)
 	scale_mtof = min_scale_mtof;
+#endif
     scale_ftom = FixedDiv(FRACUNIT, scale_mtof);
 }
 
@@ -1117,6 +1130,105 @@ AM_drawMline
 	AM_drawFline(&fl, color); // draws it on frame buffer using fb coords
 }
 
+#if BADGER_DOOM
+typedef enum
+{
+    AM_BADGER_WALL,
+    AM_BADGER_STEP,
+    AM_BADGER_DOOR,
+    AM_BADGER_DOTTED,
+    AM_BADGER_GRID,
+    AM_BADGER_ARROW,
+    AM_BADGER_HALO
+} am_badger_stroke_t;
+
+static void AM_badgerFline(const fline_t *line, am_badger_stroke_t stroke, unsigned phase)
+{
+    const int dx = abs(line->b.x - line->a.x);
+    const int dy = abs(line->b.y - line->a.y);
+    const boolean horizontal = dx >= dy;
+    const int length = horizontal ? dx : dy;
+    const int short_length = horizontal ? dy : dx;
+    const int sx = line->b.x < line->a.x ? -1 : 1;
+    const int sy = line->b.y < line->a.y ? -1 : 1;
+    const int start = stroke == AM_BADGER_HALO ? -3 : stroke == AM_BADGER_ARROW ? -1 : 0;
+    // A one-source-pixel vertical stroke could land in a skipped column.
+    const int end = stroke == AM_BADGER_HALO ? 3
+                  : stroke == AM_BADGER_ARROW || stroke == AM_BADGER_WALL
+                    || (!horizontal && stroke != AM_BADGER_GRID) ? 1 : 0;
+    const int color = stroke == AM_BADGER_HALO ? BADGER_MAP_BLACK : BADGER_MAP_WHITE;
+    // The gaps must survive combining adjacent source rows on the panel.
+    const unsigned pattern = stroke == AM_BADGER_STEP ? 0x01ff
+                           : stroke == AM_BADGER_DOTTED ? 0x0303
+                           : stroke == AM_BADGER_GRID ? 0x0001 : 0xffff;
+    // A door is a thin line with jamb marks, not another dashed step.
+    const int jamb1 = length < 8 ? length / 2 : length / 4;
+    const int jamb2 = length < 8 ? jamb1 : length - jamb1;
+    int x = line->a.x;
+    int y = line->a.y;
+    int error = 2 * short_length - length;
+
+    for (int i = 0; i <= length; ++i, ++phase)
+    {
+        if ((pattern >> (phase & 15)) & 1)
+        {
+            const boolean jamb = stroke == AM_BADGER_DOOR && (i == jamb1 || i == jamb2);
+            const int first = jamb ? -3 : start;
+            const int last = jamb ? 3 : end;
+            for (int k = first; k <= last; ++k)
+            {
+                const int px = x + (horizontal ? 0 : k);
+                const int py = y + (horizontal ? k : 0);
+                if ((unsigned) px < (unsigned) f_w && (unsigned) py < (unsigned) f_h)
+                    fb[py * f_w + px] = color;
+            }
+        }
+
+        if (error >= 0)
+        {
+            if (horizontal) y += sy;
+            else x += sx;
+            error -= 2 * length;
+        }
+        if (horizontal) x += sx;
+        else y += sy;
+        error += 2 * short_length;
+    }
+}
+
+static void AM_badgerMline(mline_t *line, am_badger_stroke_t stroke)
+{
+    fline_t fl;
+    if (!AM_clipMline(line, &fl))
+        return;
+
+    // Start each pattern at the actual linedef endpoint, not at the
+    // clipped viewport edge, so it stays put while panning.
+    unsigned phase = 0;
+    if (stroke == AM_BADGER_STEP || stroke == AM_BADGER_DOTTED)
+        phase = abs(fl.b.x - fl.a.x) >= abs(fl.b.y - fl.a.y)
+              ? abs(fl.a.x - CXMTOF(line->a.x))
+              : abs(fl.a.y - CYMTOF(line->a.y));
+    AM_badgerFline(&fl, stroke, phase);
+}
+
+static boolean AM_badgerManualDoor(int special)
+{
+    // The specials passed to EV_VerticalDoor in P_UseSpecialLine.
+    // Tagged specials belong to the trigger, not to the actual doorway.
+    switch (special)
+    {
+      case 1:
+      case 26: case 27: case 28:
+      case 31: case 32: case 33: case 34:
+      case 117: case 118:
+        return true;
+      default:
+        return false;
+    }
+}
+#endif
+
 
 
 //
@@ -1124,6 +1236,9 @@ AM_drawMline
 //
 void AM_drawGrid(int color)
 {
+#if BADGER_DOOM
+    (void) color;
+#endif
     fixed_t x, y;
     fixed_t start, end;
     mline_t ml;
@@ -1142,7 +1257,11 @@ void AM_drawGrid(int color)
     {
 	ml.a.x = x;
 	ml.b.x = x;
+#if BADGER_DOOM
+        AM_badgerMline(&ml, AM_BADGER_GRID);
+#else
 	AM_drawMline(&ml, color);
+#endif
     }
 
     // Figure out start of horizontal gridlines
@@ -1159,7 +1278,11 @@ void AM_drawGrid(int color)
     {
 	ml.a.y = y;
 	ml.b.y = y;
+#if BADGER_DOOM
+        AM_badgerMline(&ml, AM_BADGER_GRID);
+#else
 	AM_drawMline(&ml, color);
+#endif
     }
 
 }
@@ -1180,6 +1303,28 @@ void AM_drawWalls(void)
 	l.a.y = vertex_y(line_v1(li));
 	l.b.x = vertex_x(line_v2(li));
 	l.b.y = vertex_y(line_v2(li));
+#if BADGER_DOOM
+        const int flags = line_flags(li);
+        if ((flags & LINE_NEVERSEE) && !cheating)
+            continue;
+        if (cheating || line_is_mapped(li))
+        {
+            const sector_t *back = line_backsector(li);
+            const int special = line_special(li);
+            const sector_t *front = line_frontsector(li);
+            if (!back || (flags & ML_SECRET) || special == 39)
+                AM_badgerMline(&l, AM_BADGER_WALL);
+            else if (AM_badgerManualDoor(special))
+                AM_badgerMline(&l, AM_BADGER_DOOR);
+            else if (back->rawfloorheight != front->rawfloorheight
+                  || back->rawceilingheight != front->rawceilingheight)
+                AM_badgerMline(&l, AM_BADGER_STEP);
+            else if (cheating)
+                AM_badgerMline(&l, AM_BADGER_DOTTED);
+        }
+        else if (plr->powers[pw_allmap])
+            AM_badgerMline(&l, AM_BADGER_DOTTED);
+#else
     if (cheating || line_is_mapped(li))
 	{
 	    if ((line_flags(li) & LINE_NEVERSEE) && !cheating)
@@ -1216,6 +1361,7 @@ void AM_drawWalls(void)
 	{
 	    if (!(line_flags(li) & LINE_NEVERSEE)) AM_drawMline(&l, GRAYS+3);
 	}
+#endif
     }
 }
 
@@ -1292,16 +1438,61 @@ AM_drawLineCharacter
     }
 }
 
+#if BADGER_DOOM
+static void AM_drawBadgerPlayer(void)
+{
+    // Keep the heading readable even at the widest zoom.
+    // Tip, tail, and the two wings, pointing east before rotation.
+    static const fpoint_t arrow[] = { { 11, 0 }, { -10, 0 }, { 1, 8 }, { 1, -8 } };
+    const int x = CXMTOF(plr->mo->xy.x);
+    const int y = CYMTOF(plr->mo->xy.y);
+    if (x < -16 || x >= f_w + 16 || y < -16 || y >= f_h + 16)
+        return;
+
+    const unsigned fine = mobj_angle(plr->mo) >> ANGLETOFINESHIFT;
+    const fixed_t c = finecosine(fine);
+    const fixed_t s = finesine(fine);
+    fpoint_t points[arrlen(arrow)];
+    for (unsigned i = 0; i < arrlen(arrow); ++i)
+    {
+        points[i].x = x + ((arrow[i].x * c - arrow[i].y * s + FRACUNIT / 2) >> FRACBITS);
+        points[i].y = y - ((arrow[i].x * s + arrow[i].y * c + FRACUNIT / 2) >> FRACBITS);
+    }
+
+    for (unsigned i = 0; i < arrlen(points); ++i)
+    {
+        // Cap the buffer around the arrow where the strokes end or meet.
+        const fline_t cap = { { points[i].x - 2, points[i].y }, { points[i].x + 2, points[i].y } };
+        AM_badgerFline(&cap, AM_BADGER_HALO, 0);
+    }
+    for (unsigned i = 1; i < arrlen(points); ++i)
+    {
+        const fline_t line = { points[0], points[i] };
+        AM_badgerFline(&line, AM_BADGER_HALO, 0);
+    }
+    for (unsigned i = 1; i < arrlen(points); ++i)
+    {
+        const fline_t line = { points[0], points[i] };
+        AM_badgerFline(&line, AM_BADGER_ARROW, 0);
+    }
+}
+#endif
+
 void AM_drawPlayers(void)
 {
     int		i;
     player_t*	p;
+#if !BADGER_DOOM
     static int 	their_colors[] = { GREENS, GRAYS, BROWNS, REDS };
     int		their_color = -1;
+#endif
     int		color;
 
     if (!netgame)
     {
+#if BADGER_DOOM
+        AM_drawBadgerPlayer();
+#else
 	if (cheating)
 	    AM_drawLineCharacter
 		(cheat_player_arrow, arrlen(cheat_player_arrow), 0,
@@ -1310,12 +1501,15 @@ void AM_drawPlayers(void)
 	    AM_drawLineCharacter
 		(player_arrow, arrlen(player_arrow), 0, mobj_angle(plr->mo),
 		 WHITE, plr->mo->xy.x, plr->mo->xy.y);
+#endif
 	return;
     }
 
     for (i=0;i<MAXPLAYERS;i++)
     {
+#if !BADGER_DOOM
 	their_color++;
+#endif
 	p = &players[i];
 
 	if ( (deathmatch && !singledemo) && p != plr)
@@ -1324,15 +1518,24 @@ void AM_drawPlayers(void)
 	if (!playeringame[i])
 	    continue;
 
+#if BADGER_DOOM
+        if (p == plr)
+            continue;
+        color = p->powers[pw_invisibility] ? BADGER_MAP_BLACK : BADGER_MAP_WHITE;
+#else
 	if (p->powers[pw_invisibility])
 	    color = 246; // *close* to black
 	else
 	    color = their_colors[their_color];
+#endif
 	
 	AM_drawLineCharacter
 	    (player_arrow, arrlen(player_arrow), 0, mobj_angle(p->mo),
 	     color, p->mo->xy.x, p->mo->xy.y);
     }
+#if BADGER_DOOM
+    AM_drawBadgerPlayer();
+#endif
 
 }
 
@@ -1384,17 +1587,43 @@ void AM_drawMarks(void)
 
 }
 
+#if BADGER_DOOM
+static void AM_drawPanReticle(void)
+{
+    // When not following, mark the point where the next map pin appears.
+    const int x = f_w / 2;
+    const int y = f_h / 2;
+    for (int d = -4; d <= 4; ++d)
+    {
+        if (d >= -1 && d <= 1) continue;
+        fb[(y + d) * f_w + x] = BADGER_MAP_WHITE;
+        fb[y * f_w + x + d] = BADGER_MAP_WHITE;
+    }
+}
+#else
 void AM_drawCrosshair(int color)
 {
     fb[(f_w*(f_h+1))/2] = color; // single point for now
 
 }
+#endif
 
 void AM_Drawer (void)
 {
     if (!automapactive) return;
     fb = I_VideoBuffer;
 
+#if BADGER_DOOM
+    AM_clearFB(BADGER_MAP_BLACK);
+    if (grid)
+        AM_drawGrid(BADGER_MAP_WHITE);
+    AM_drawWalls();
+    if (cheating == 2)
+        AM_drawThings(BADGER_MAP_WHITE, 0);
+    if (!followplayer)
+        AM_drawPanReticle();
+    AM_drawPlayers();
+#else
     AM_clearFB(BACKGROUND);
     if (grid)
 	AM_drawGrid(GRIDCOLORS);
@@ -1403,6 +1632,7 @@ void AM_Drawer (void)
     if (cheating==2)
 	AM_drawThings(THINGCOLORS, THINGRANGE);
     AM_drawCrosshair(XHAIRCOLORS);
+#endif
 
     AM_drawMarks();
 

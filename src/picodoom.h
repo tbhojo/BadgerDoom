@@ -35,6 +35,9 @@ void pd_start_save_pause(void);
 void pd_end_save_pause(void);
 const uint8_t *get_end_of_flash(void);
 #endif
+#if BADGER_DOOM
+#define PD_FLAG_MONSTER 4  // Scoped to a living world sprite's masked columns.
+#endif
 extern int pd_flag;
 extern fixed_t pd_scale;
 #ifdef __cplusplus

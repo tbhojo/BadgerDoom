@@ -271,13 +271,16 @@ static_assert(sizeof(pd_column) == sizeof(flat_run) * 2, ""); // we pack two int
 
 #if BADGER_DOOM
 // Textured columns clamp inverse scale to 20 bits. Planes keep their full
-// 24-bit scale, so the marker is only meaningful on textured columns.
+// 24-bit scale, so the markers are only meaningful on textured columns.
 static constexpr uint32_t STEP_SCALE_FLAG = 1u << 23;
-static_assert(STEP_SCALE_FLAG > DDA_MAX, "");
+static constexpr uint32_t MONSTER_SCALE_FLAG = 1u << 22;
+static constexpr uint32_t TEXTURED_SCALE_FLAGS = STEP_SCALE_FLAG | MONSTER_SCALE_FLAG;
+static_assert((TEXTURED_SCALE_FLAGS & DDA_MAX) == 0 && TEXTURED_SCALE_FLAGS < (1u << 24), "");
 
 static uint8_t badger_step_palette[256];
+static lighttable_t badger_monster_colormap[256];
 
-static void init_badger_step_palette() {
+static void init_badger_column_palettes() {
     static bool initialized;
     if (initialized) return;
 
@@ -305,6 +308,9 @@ static void init_badger_step_palette() {
         // original texture detail and distance/sector lighting still visible.
         unsigned target = tones[i] + (255 - tones[i]) * 3 / 8;
         badger_step_palette[i] = nearest[target];
+        // Use the original texel's tone, not sector light: dark features
+        // remain legible against the predominantly bright sprite (75% or white).
+        badger_monster_colormap[i] = nearest[tones[i] < 50 ? 0 : tones[i] < 78 ? 184 : 255];
     }
     initialized = true;
 }
@@ -312,8 +318,8 @@ static void init_badger_step_palette() {
 
 static uint32_t column_sort_scale(const pd_column &c) {
 #if BADGER_DOOM
-    if ((c.scale & STEP_SCALE_FLAG) && c.texturemid != TEXTUREMID_PLANE)
-        return c.scale & ~STEP_SCALE_FLAG;
+    if ((c.scale & TEXTURED_SCALE_FLAGS) && c.texturemid != TEXTUREMID_PLANE)
+        return c.scale & ~TEXTURED_SCALE_FLAGS;
 #endif
     return c.scale;
 }
@@ -321,7 +327,7 @@ static uint32_t column_sort_scale(const pd_column &c) {
 static fixed_t column_fracstep(const pd_column &c) {
     uint32_t scale = c.scale; // Only called for textured columns.
 #if BADGER_DOOM
-    scale &= ~STEP_SCALE_FLAG;
+    scale &= ~TEXTURED_SCALE_FLAGS;
 #endif
     return scale ? DDA_UP_SHIFT(scale) : FRACUNIT;
 }
@@ -833,6 +839,9 @@ static void push_down_x(int x, int new_index) {
 
 void pd_begin_frame() {
     DEBUG_PINS_SET(start_end, 1);
+#if BADGER_DOOM
+    init_badger_column_palettes();
+#endif
     if (gamestate == GS_LEVEL) {
 //        render_frame_index ^= 1;
     }
@@ -954,7 +963,6 @@ void pd_add_column(pd_column_type type) {
     render_cols[rc_index].scale = pd_flag & 2 ? 0 : iscale;
 #if BADGER_DOOM
     if (type == PDCOL_STEP) {
-        init_badger_step_palette();
         render_cols[rc_index].scale |= STEP_SCALE_FLAG;
     }
 #endif
@@ -1055,6 +1063,12 @@ void pd_add_masked_columns(uint8_t *ys, int seg_count) {
 
     assert(ys[1] >= ys[0]);
     render_cols[rc_index].scale = pd_flag & 2 ? 0 : iscale;
+#if BADGER_DOOM
+    if (pd_flag & PD_FLAG_MONSTER) {
+        assert(!(pd_flag & 2) && dc_colormap_index >= 0);
+        render_cols[rc_index].scale |= MONSTER_SCALE_FLAG;
+    }
+#endif
     render_cols[rc_index].colormap_index = dc_colormap_index;
 #if !FORCE_ISCALE
     if (type != PDCOL_SKY) {
@@ -1685,9 +1699,13 @@ static inline void draw_texture_column(uint8_t *dest, const pd_column &c, const 
     fixed_t fracstep = column_fracstep(c);
     fixed_t frac = UP_SHIFT(c.texturemid) + (c.yl - centery) * fracstep;
 #if BADGER_DOOM
-    if (c.scale & STEP_SCALE_FLAG) {
-        col_render<true>(dest, c.yh - c.yl, pixels, frac, fracstep, colormap);
-        return;
+    const uint32_t flags = c.scale & TEXTURED_SCALE_FLAGS;
+    if (flags) {
+        if (flags & STEP_SCALE_FLAG) {
+            col_render<true>(dest, c.yh - c.yl, pixels, frac, fracstep, colormap);
+            return;
+        }
+        colormap = badger_monster_colormap;
     }
 #endif
     col_render(dest, c.yh - c.yl, pixels, frac, fracstep, colormap);

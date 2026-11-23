@@ -598,6 +598,15 @@ static void __noinline render_text_mode_scanline(scanvideo_scanline_buffer_t *bu
 static void __scratch_x("scanlines") scanline_func_double(uint32_t *dest, int scanline) {
     if (scanline < MAIN_VIEWHEIGHT) {
         const uint8_t *src = frame_buffer[display_frame_index] + scanline * SCREENWIDTH;
+#if BADGER_DOOM
+        if (automapactive) {
+            uint16_t *pixels = (uint16_t *)dest;
+            for (int x = 0; x < SCREENWIDTH; ++x) {
+                pixels[x] = src[x] == BADGER_MAP_WHITE ? UI_WHITE : 0;
+            }
+            return;
+        }
+#endif
 //        if (scanline == 100) {
 //            printf("SL %d %p\n", display_frame_index, &frame_buffer[display_frame_index]);
 //        }
@@ -1211,8 +1220,9 @@ static void badger_draw_hud(uint8_t *dest) {
 }
 
 void I_FinishUpdate(void) {
-    // A fixed 8×8 screen-space pattern gives up to 64 tones without
-    // shimmering between partial refreshes or binarizing dark artwork.
+    // Keep finely shaded artwork; stagger short pixel clusters in the
+    // world so dim surfaces don't turn into a regular screen-door grid.
+    // The lowest nonblack level fills only 1/8 of a tile.
     static const uint8_t bayer[8][8] = {
         {  2, 130,  34, 162,  10, 138,  42, 170},
         {194,  66, 226,  98, 202,  74, 234, 106},
@@ -1222,6 +1232,16 @@ void I_FinishUpdate(void) {
         {206,  78, 238, 110, 198,  70, 230, 102},
         { 62, 190,  30, 158,  54, 182,  22, 150},
         {254, 126, 222,  94, 246, 118, 214,  86},
+    };
+    static const uint8_t clustered[8][8] = {
+        { 20,  20,  72, 124,  72, 168, 168,  72},
+        { 44,  44,  72, 124, 124, 216, 216, 124},
+        { 72,  72, 168, 168,  20,  72, 124,  20},
+        {124, 124, 216, 216,  44,  72, 124,  44},
+        { 72, 124,  44,  44, 216, 124, 124, 216},
+        {168, 168,  72,  72, 124,  20,  20,  72},
+        {216, 216, 124, 124, 124,  44,  44,  72},
+        { 72, 124,  20,  20, 168,  72,  72, 168},
     };
     static uint8_t frames[2][BADGER_FRAME_BYTES];
     static unsigned next;
@@ -1246,6 +1266,7 @@ void I_FinishUpdate(void) {
     // The normal double-buffered level view (including automap and pause)
     // has a status-bar region. Leave full-screen artwork and wipes alone.
     const bool has_hud = display_video_type == VIDEO_TYPE_DOUBLE && gamestate == GS_LEVEL && !has_footer;
+    const bool world = has_hud && !automapactive;
     const int scene_height = has_hud ? BADGER_HUD_TOP : BADGER_HEIGHT;
     for (int y = 0; y < scene_height; ++y) {
         const int last_y = has_footer && y >= footer_y
@@ -1262,7 +1283,7 @@ void I_FinishUpdate(void) {
                 sum[x] = ((sum[x] | p) & UI_WHITE) ? UI_WHITE : sum[x] + p;
             }
         }
-        const uint8_t *threshold = bayer[y & 7];
+        const uint8_t *threshold = world ? clustered[y & 7] : bayer[y & 7];
         for (int x = 0; x < BADGER_WIDTH;) {
             uint8_t bits = 0;
             for (int bit = 0; bit < 8; ++bit, ++x) {

@@ -128,6 +128,8 @@ extern uint8_t next_frame_index; // next frame_index to be picked up by the dipl
 extern uint8_t next_overlay_index;
 #if BADGER_DOOM
 enum { BADGER_MENU_FOOTER_Y = SCREENHEIGHT - 16 };
+// The automap writes binary pixels before palette conversion.
+enum { BADGER_MAP_BLACK = 0, BADGER_MAP_WHITE = 4 };
 // The UI patches are the final entries in the completed overlay list.
 void I_SetBadgerOverlay(unsigned first_patch, boolean menu, boolean help);
 #endif

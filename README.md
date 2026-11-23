@@ -37,6 +37,13 @@ Walkable step faces are brightened relative to the floor so the steps
 stand out without changing level geometry. In E1M1, the first room's
 side staircase is through the opening on your left as you enter.
 
+Gameplay uses grouped halftone dots instead of fine-grained dithering. Living
+monsters use a separate high-contrast treatment for their visible sprite
+pixels; fuzzy spectres and lighting effects such as invulnerability keep
+their normal rendering. The automap uses a large heading arrow, solid walls,
+dashed height changes, and small crossbars on discovered doors. Secret doors
+still look like walls, and the map does not reveal new areas on open.
+
 ### Build and install
 
 The tested toolchain is CMake 3.26, Pico SDK 2.1.1 (with its TinyUSB
