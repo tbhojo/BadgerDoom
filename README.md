@@ -22,10 +22,13 @@ The `github_universe_badger` board builds `doom_tiny` for the **RP2350A** badge
 with the **296×128 monochrome E-Ink panel**. It keeps Doom's game timing and
 renders the entire view, status bar, and menus to the UC8151 panel. Partial
 refresh uses the badge-compatible 100 Hz controller clock, with about
-two visible updates per second during movement. Menus and the pause label
-use solid high-contrast text; a separate wall lighting curve preserves more
-detail on distant surfaces. The port is single-player and silent; USB is
-for diagnostics and reflashing, not keyboard input.
+two visible updates per second during movement. The original DOOM logo keeps
+its shading, menu text and the pause label use high contrast, and distant
+surfaces retain more detail in monochrome. After at least 16 partial
+updates, a picture that stays still for five seconds gets a full refresh
+to clear residual images. Expect a visible flash and about five seconds
+before the panel can update again. The port is single-player and silent;
+USB is for diagnostics and reflashing, not keyboard input.
 
 ### Build and install
 
@@ -71,7 +74,7 @@ and replaces Doom and its saves.
 | --- | --- |
 | Play | **Up/Down** move, **A/C** turn, **B** fires, **Up+Down** uses or opens |
 | Shortcuts | Hold **A+C**, then tap **B** for next weapon, **Up** for automap, or **Down** to pause |
-| Menu | Press and release **A+C** to open or close; **Up/Down** select, **A/C** adjust, **B** confirms, **Up+Down** goes back |
+| Menu | Press and release **A+C** to open or close; **Up/Down** select, **A/C** adjust, **B** confirms. Submenu footers show **Up+Down** for Back |
 | Prompts and saves | **B** confirms; either chord cancels. New saves default to the current map name |
 | Automap | **A+C**, then **B** toggles follow; with follow off, **Up/Down/A/C** pan. **B** zooms in, **Up+Down** zooms out |
 

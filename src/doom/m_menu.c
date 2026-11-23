@@ -2405,6 +2405,14 @@ static void M_DrawOPLDev(void)
 }
 #endif
 
+#if BADGER_DOOM && !NO_DRAW_MENU
+static void M_DrawBadgerFooter(const char *hint)
+{
+    M_WriteText((SCREENWIDTH - M_StringWidth(hint)) / 2,
+                BADGER_MENU_FOOTER_Y, hint);
+}
+#endif
+
 //
 // M_Drawer
 // Called after the view has been rendered,
@@ -2470,6 +2478,11 @@ void M_Drawer (void)
         }
     }
 
+#if BADGER_DOOM
+    M_DrawBadgerFooter(messageNeedsInput ? "B: YES   UP+DOWN: NO"
+                                         : "B: DISMISS");
+#endif
+
 	return;
     }
 
@@ -2507,6 +2520,24 @@ void M_Drawer (void)
 #endif
 	y += LINEHEIGHT;
     }
+
+#if BADGER_DOOM
+    if (menuactive)
+    {
+        const char *hint = "UP+DOWN: BACK   A+C: CLOSE";
+#if !NO_USE_SAVE
+        if (stringEntry)
+            hint = "B: ACCEPT   UP+DOWN: CANCEL";
+        else
+#endif
+        if (inhelpscreens)
+            hint = "B: CONTINUE   UP+DOWN: BACK";
+        else if (!currentMenu->prevMenu)
+            hint = "B: SELECT   A+C: CLOSE";
+
+        M_DrawBadgerFooter(hint);
+    }
+#endif
 
     
     // DRAW SKULL
@@ -2618,7 +2649,11 @@ void M_Init (void)
     if (gameversion >= exe_ultimate)
     {
         MainMenu[readthis].routine = M_ReadThis2;
+#if BADGER_DOOM
+        ReadDef2.prevMenu = &MainDef;
+#else
         ReadDef2.prevMenu = NULL;
+#endif
     }
 
     if (gameversion >= exe_final && gameversion <= exe_final2)

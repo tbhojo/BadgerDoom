@@ -45,24 +45,34 @@
 
 #if BADGER_DOOM
 #include "badger_display.h"
+#include "badger_tone.h"
 
 enum { UI_WHITE = 0x8000 };
 
 static uint16_t ui_palette[256];
+static uint16_t menu_art_palette[256];
 static uint16_t ui_shared_pal[NUM_SHARED_PALETTES][16];
 static unsigned ui_first_patch;
 static bool ui_menu;
+static bool ui_help;
 
-void I_SetBadgerOverlay(unsigned first_patch, boolean menu) {
+void I_SetBadgerOverlay(unsigned first_patch, boolean menu, boolean help) {
     ui_first_patch = first_patch;
     ui_menu = menu;
+    ui_help = help;
 }
 
-static inline uint16_t DOOM_RGB(unsigned r, unsigned g, unsigned b) {
-    // Lift shadows without turning true black into stipple.
-    unsigned luma = (77 * r + 150 * g + 29 * b + 128) >> 8;
-    return luma + luma * (255 - luma) / 512;
+static void init_badger_menu_palettes(const uint8_t *playpal) {
+    for (unsigned i = 0; i < count_of(ui_palette); ++i) {
+        const uint8_t *rgb = playpal + i * 3;
+        const unsigned luma = (77 * rgb[0] + 150 * rgb[1] + 29 * rgb[2] + 128) >> 8;
+        const unsigned lift = luma * (255 - luma);
+        // Text rejects Doom's dark drop shadows. The logo keeps all its tones.
+        ui_palette[i] = luma + lift / 512 >= 40 ? UI_WHITE : 0;
+        menu_art_palette[i] = luma + lift / 256;
+    }
 }
+#define DOOM_RGB(r, g, b) badger_scene_tone(r, g, b)
 #else
 #include "pico/scanvideo.h"
 #include "pico/scanvideo/composable_scanline.h"
@@ -657,7 +667,7 @@ static void scanline_func_wipe(uint32_t *dest, int scanline) {
 static inline uint draw_vpatch(uint16_t *dest, patch_t *patch, vpatchlist_t *vp, uint off, bool ui) {
     const uint16_t *colors = palette;
 #if BADGER_DOOM
-    if (ui) colors = ui_palette;
+    if (ui) colors = vp->entry.patch_handle == VPATCH_M_DOOM ? menu_art_palette : ui_palette;
 #endif
     int repeat = vp->entry.repeat;
     dest += vp->entry.x;
@@ -917,6 +927,9 @@ void __noinline new_frame_init_overlays_palette_and_wipe() {
                 lumpindex_t l = W_GetNumForName("PLAYPAL");
                 playpal = W_CacheLumpNum(l, PU_STATIC);
                 calculate_palettes = W_LumpLength(l) == 768;
+#if BADGER_DOOM
+                init_badger_menu_palettes(playpal);
+#endif
             }
             if (!calculate_palettes || !next_pal) {
                 const uint8_t *doompalette = playpal + next_pal * 768;
@@ -955,12 +968,6 @@ void __noinline new_frame_init_overlays_palette_and_wipe() {
                 }
             }
             next_pal = -1;
-#if BADGER_DOOM
-            for (unsigned i = 0; i < count_of(palette); ++i) {
-                // Keep the bright letter faces, not Doom's dark drop shadows.
-                ui_palette[i] = palette[i] >= 40 ? UI_WHITE : 0;
-            }
-#endif
             assert(vpatch_type(stbar) == vp4_solid); // no transparent, no runs, 4 bpp
             for (int i = 0; i < NUM_SHARED_PALETTES; i++) {
                 patch_t *patch = resolve_vpatch_handle(vpatch_for_shared_palette[i]);
@@ -1031,8 +1038,9 @@ void __no_inline_not_in_flash_func(new_frame_stuff)() {
 // Overlay source offsets advance on each row, even when a backend downsamples it.
 static inline void compose_scanline(uint32_t *dest, int scanline) {
 #if BADGER_DOOM
-    if (ui_menu) {
-        // Modal options and prompts need a clean canvas, not dithered title art.
+    const bool ui_backdrop = ui_menu || (ui_help && scanline >= BADGER_MENU_FOOTER_Y - 2);
+    if (ui_backdrop) {
+        // Keep help artwork above its footer, and other menus on a clean canvas.
         memset(dest, 0, SCREENWIDTH * sizeof(uint16_t));
     } else
 #endif
@@ -1064,7 +1072,7 @@ static inline void compose_scanline(uint32_t *dest, int scanline) {
             bool ui = false;
 #if BADGER_DOOM
             ui = (unsigned)vp >= ui_first_patch;
-            if (!ui && ui_menu) {
+            if (!ui && ui_backdrop) {
                 prev = vp;
                 continue;
             }
@@ -1085,11 +1093,17 @@ static inline void compose_scanline(uint32_t *dest, int scanline) {
 
 #if BADGER_DOOM
 void I_FinishUpdate(void) {
-    static const uint8_t bayer[4][4] = {
-        { 8, 136,  40, 168},
-        {200, 72, 232, 104},
-        { 56, 184,  24, 152},
-        {248, 120, 216,  88},
+    // A fixed 8×8 screen-space pattern gives up to 64 tones without
+    // shimmering between partial refreshes or binarizing dark artwork.
+    static const uint8_t bayer[8][8] = {
+        {  2, 130,  34, 162,  10, 138,  42, 170},
+        {194,  66, 226,  98, 202,  74, 234, 106},
+        { 50, 178,  18, 146,  58, 186,  26, 154},
+        {242, 114, 210,  82, 250, 122, 218,  90},
+        { 14, 142,  46, 174,   6, 134,  38, 166},
+        {206,  78, 238, 110, 198,  70, 230, 102},
+        { 62, 190,  30, 158,  54, 182,  22, 150},
+        {254, 126, 222,  94, 246, 118, 214,  86},
     };
     static uint8_t frames[2][BADGER_FRAME_BYTES];
     static unsigned next;
@@ -1107,8 +1121,13 @@ void I_FinishUpdate(void) {
     uint8_t *out = frames[next];
     const uint16_t *pixels = (const uint16_t *)scanline;
     int source_y = 0;
+    // Keep the small control hints at native height. The menu has no
+    // content below the footer that needs fitting onto the panel.
+    const int footer_y = (BADGER_MENU_FOOTER_Y * BADGER_HEIGHT + SCREENHEIGHT - 1) / SCREENHEIGHT;
+    const bool has_footer = ui_menu || ui_help;
     for (int y = 0; y < BADGER_HEIGHT; ++y) {
-        const int last_y = (y + 1) * SCREENHEIGHT / BADGER_HEIGHT;
+        const int last_y = has_footer && y >= footer_y
+                         ? source_y + 1 : (y + 1) * SCREENHEIGHT / BADGER_HEIGHT;
         const int rows = last_y - source_y;
         compose_scanline(scanline, source_y++);
         for (int x = 0; x < BADGER_WIDTH; ++x) {
@@ -1121,11 +1140,11 @@ void I_FinishUpdate(void) {
                 sum[x] = ((sum[x] | p) & UI_WHITE) ? UI_WHITE : sum[x] + p;
             }
         }
-        const uint8_t *threshold = bayer[y & 3];
+        const uint8_t *threshold = bayer[y & 7];
         for (int x = 0; x < BADGER_WIDTH;) {
             uint8_t bits = 0;
             for (int bit = 0; bit < 8; ++bit, ++x) {
-                bits = (bits << 1) | ((sum[x] & UI_WHITE) || sum[x] >= rows * threshold[x & 3]);
+                bits = (bits << 1) | ((sum[x] & UI_WHITE) || sum[x] >= rows * threshold[bit]);
             }
             *out++ = bits;
         }

@@ -2967,7 +2967,7 @@ void pd_end_frame(int wipe_start) {
 #endif
     M_Drawer();
 #if BADGER_DOOM
-    I_SetBadgerOverlay(first_ui_patch, menuactive && !inhelpscreens);
+    I_SetBadgerOverlay(first_ui_patch, menuactive && !inhelpscreens, inhelpscreens != 0);
 #endif
 
 #if !BADGER_DOOM

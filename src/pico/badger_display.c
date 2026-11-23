@@ -36,7 +36,7 @@
 #define PANEL_SPI SPI_INSTANCE(BADGER_PANEL_SPI)
 
 // Panel addresses are portrait: one gate per landscape column, with 16
-// vertical bytes per column. Stream eight adjacent columns per transpose.
+// vertical bytes per column. Pack eight adjacent columns per transpose.
 enum {
     FRAME_STRIDE = BADGER_WIDTH / 8,
     PANEL_COLUMN_BYTES = BADGER_HEIGHT / 8,
@@ -44,8 +44,11 @@ enum {
     POWER_TIMEOUT_MS = 1000,
     FULL_REFRESH_TIMEOUT_MS = 10000,
     PARTIAL_REFRESH_TIMEOUT_MS = 2000,
+    IDLE_CLEAN_MIN_PARTIALS = 16,
+    IDLE_CLEAN_DELAY_MS = 5000,
 };
 _Static_assert(FRAME_STRIDE * BADGER_HEIGHT == BADGER_FRAME_BYTES, "bad frame size");
+_Static_assert(FRAME_STRIDE * PANEL_BLOCK_BYTES == BADGER_FRAME_BYTES, "bad panel frame size");
 
 // UC8151 commands and panel setting flags for the badge's landscape rotation.
 enum {
@@ -57,10 +60,17 @@ enum {
     PANEL_SETTINGS = 0x97, // 128x296, B/W, shift right/scan down, booster and reset release
     LUT_FROM_REGISTERS = 0x20,
     PLL_100_HZ = 0x3a,
+    CDI_NEW_ONLY_WHITE_ONE = 0x9c, // DDX=01: inverted polarity, DTM2 only in B/W mode
 };
 
-static enum { OFFLINE, READY, REFRESHING } display_state;
+static enum { OFFLINE, READY, PARTIAL_REFRESHING, FULL_REFRESHING } display_state;
 static absolute_time_t refresh_deadline;
+static absolute_time_t idle_clean_deadline;
+static unsigned partials_since_full;
+
+// Keep the last packed DTM2 image so a clean can replay it without relying on
+// a second DRF on stale controller data or retaining the caller's framebuffer.
+static uint8_t panel_frame[BADGER_FRAME_BYTES];
 
 static void output_pin(uint pin, bool initial)
 {
@@ -141,38 +151,34 @@ static uint64_t transpose_tile(const uint8_t *src)
     return tile ^ swap ^ (swap << 28);
 }
 
-static void write_frame(const uint8_t *frame)
+static void pack_frame(const uint8_t *frame)
 {
-    uint8_t block[PANEL_BLOCK_BYTES];
-    if (frame == NULL) {
-        memset(block, 0xff, sizeof(block));
-    }
-
-    begin_command(DTM2);
-    gpio_put(BADGER_PANEL_DC_PIN, 1);
     for (unsigned x = 0; x < FRAME_STRIDE; ++x) {
-        if (frame != NULL) {
-            for (unsigned y = 0; y < PANEL_COLUMN_BYTES; ++y) {
-                uint64_t tile = transpose_tile(frame + y * 8 * FRAME_STRIDE + x);
-                // Each packed output byte holds eight vertical pixels, MSB first.
-                for (unsigned col = 8; col-- > 0;) {
-                    block[col * PANEL_COLUMN_BYTES + y] = (uint8_t)tile;
-                    tile >>= 8;
-                }
+        uint8_t *block = panel_frame + x * PANEL_BLOCK_BYTES;
+        for (unsigned y = 0; y < PANEL_COLUMN_BYTES; ++y) {
+            uint64_t tile = transpose_tile(frame + y * 8 * FRAME_STRIDE + x);
+            // Each packed output byte holds eight vertical pixels, MSB first.
+            for (unsigned col = 8; col-- > 0;) {
+                block[col * PANEL_COLUMN_BYTES + y] = (uint8_t)tile;
+                tile >>= 8;
             }
         }
-        spi_write_blocking(PANEL_SPI, block, sizeof(block));
     }
-    gpio_put(BADGER_PANEL_CS_PIN, 1);
+}
+
+static void write_panel_frame(void)
+{
+    command(DTM2, panel_frame, sizeof(panel_frame));
     command_only(DSP);
 }
 
-static void start_refresh(uint32_t timeout_ms)
+static void start_refresh(bool full)
 {
     gpio_acknowledge_irq(BADGER_PANEL_BUSY_PIN, GPIO_IRQ_EDGE_FALL);
     command_only(DRF);
-    refresh_deadline = make_timeout_time_ms(timeout_ms);
-    display_state = REFRESHING;
+    refresh_deadline = make_timeout_time_ms(full ? FULL_REFRESH_TIMEOUT_MS
+                                                 : PARTIAL_REFRESH_TIMEOUT_MS);
+    display_state = full ? FULL_REFRESHING : PARTIAL_REFRESHING;
 }
 
 static bool refresh_complete(void)
@@ -196,6 +202,7 @@ static bool panel_failed(void)
 bool badger_display_init(void)
 {
     display_state = OFFLINE;
+    partials_since_full = 0;
     output_pin(BADGER_POWER_ENABLE_PIN, true);
     output_pin(BADGER_PANEL_CS_PIN, true);
     output_pin(BADGER_PANEL_DC_PIN, false);
@@ -222,7 +229,7 @@ bool badger_display_init(void)
     command(PFS, (const uint8_t[]){0x00}, 1);
     command(TSE, (const uint8_t[]){0x00}, 1);
     command(TCON, (const uint8_t[]){0x22}, 1);
-    command(CDI, (const uint8_t[]){0x9c}, 1);
+    command(CDI, (const uint8_t[]){CDI_NEW_ONLY_WHITE_ONE}, 1);
     // Keep this clock for both waveforms. At 200 Hz BUSY can complete
     // without producing a visible partial update on the Universe badge.
     command(PLL, (const uint8_t[]){PLL_100_HZ}, 1);
@@ -233,8 +240,9 @@ bool badger_display_init(void)
     }
 
     command_only(PTOU);
-    write_frame(NULL);
-    start_refresh(FULL_REFRESH_TIMEOUT_MS);
+    memset(panel_frame, 0xff, sizeof(panel_frame));
+    write_panel_frame();
+    start_refresh(true);
     while (!refresh_complete()) {
         if (time_reached(refresh_deadline)) {
             return panel_failed();
@@ -250,15 +258,33 @@ bool badger_display_init(void)
 
 bool badger_display_ready(void)
 {
-    if (display_state == REFRESHING) {
-        if (refresh_complete()) {
-            command_only(PTOU);
-            display_state = READY;
-        } else if (time_reached(refresh_deadline)) {
-            return panel_failed();
+    if (display_state == PARTIAL_REFRESHING || display_state == FULL_REFRESHING) {
+        if (!refresh_complete()) {
+            return time_reached(refresh_deadline) ? panel_failed() : false;
         }
+        if (display_state == PARTIAL_REFRESHING) {
+            command_only(PTOU);
+            if (++partials_since_full >= IDLE_CLEAN_MIN_PARTIALS) {
+                idle_clean_deadline = make_timeout_time_ms(IDLE_CLEAN_DELAY_MS);
+            }
+        } else {
+            load_partial_waveform();
+            partials_since_full = 0;
+        }
+        display_state = READY;
     }
-    return display_state == READY;
+    if (display_state != READY) {
+        return false;
+    }
+
+    // The long OTP refresh would hide gameplay. Wait for a quiet image.
+    if (partials_since_full >= IDLE_CLEAN_MIN_PARTIALS && time_reached(idle_clean_deadline)) {
+        command(PSR, (const uint8_t[]){PANEL_SETTINGS}, 1);
+        write_panel_frame();
+        start_refresh(true);
+        return false;
+    }
+    return true;
 }
 
 void badger_display_submit(const uint8_t *frame)
@@ -271,8 +297,9 @@ void badger_display_submit(const uint8_t *frame)
         0, 0, (BADGER_WIDTH - 1) >> 8, (BADGER_WIDTH - 1) & 0xff, // gate range (BE)
         1, // PT_SCAN: scan all gates
     };
+    pack_frame(frame);
     command_only(PTIN);
     command(PTL, window, sizeof(window));
-    write_frame(frame);
-    start_refresh(PARTIAL_REFRESH_TIMEOUT_MS);
+    write_panel_frame();
+    start_refresh(false);
 }

@@ -12,7 +12,8 @@
 // Call all display functions from the same core.
 bool badger_display_init(void);
 
-// Service the current refresh without waiting for it; true if ready for a frame.
+// Poll regularly, even when the frame is unchanged. May start a full clean
+// of the last frame; never waits for the panel. True if ready for a new frame.
 bool badger_display_ready(void);
 
 // Call only when ready. Copies a row-major, MSB-first frame (1 = white) to
