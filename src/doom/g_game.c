@@ -1176,7 +1176,9 @@ void G_Ticker (void)
 	break; 
  
       case GS_DEMOSCREEN: 
+#if !BADGER_DOOM
 	D_PageTicker (); 
+#endif
 	break;
     }        
 } 

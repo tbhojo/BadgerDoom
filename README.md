@@ -52,10 +52,11 @@ picotool load -u -v -x build-badger/src/doom_tiny.uf2
 keeps the firmware below the WHX slot. On-badge saves use flash offsets
 `0x200000`–`0x2fffff`; they do not touch the firmware, WHX, or top MiB.
 
-On boot the panel clears, then shows Doom's title screen. USB CDC reports the
-boot, WHX check, panel initialization, and first frame. To update the
-firmware, reenter BOOTSEL and load the new UF2. You do not need to reload
-the WHX or erase saves.
+On boot the panel clears, then stays on Doom's title screen until you open
+the menu. The Badger does not play the attract-mode demos. USB CDC reports
+the boot, WHX check, panel initialization, and first frame. To update the
+firmware, reenter BOOTSEL and load the new UF2. You do not need to reload the
+WHX or erase saves.
 
 To restore the pre-install image, reenter BOOTSEL and run
 `picotool load -v -t bin badger-backup.bin -o 0x10000000`, then
