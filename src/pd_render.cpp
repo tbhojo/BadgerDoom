@@ -3054,6 +3054,8 @@ void pd_end_frame(int wipe_start) {
     // Keep modal UI separate from the indexed world so the E-Ink compositor
     // can give it a solid backdrop and preserve thin glyph strokes.
     auto *overlay = vpatchlists->overlays[render_overlay_index];
+    const bool native_rows = M_BadgerMenuNativeRows();
+    if (native_rows) V_BeginPatchList(overlay);
     const unsigned first_ui_patch = overlay->header.size;
     const bool pause_overlay = paused && !menuactive && !inhelpscreens;
     if (pause_overlay) {
@@ -3066,7 +3068,7 @@ void pd_end_frame(int wipe_start) {
 #if BADGER_DOOM
     const void *menu_page = menuactive && !inhelpscreens ? M_BadgerMenuPage() : nullptr;
     I_SetBadgerOverlay(first_ui_patch, menu_page, help_page, pause_overlay,
-                       help_page != (inhelpscreens & 127));
+                       help_page != (inhelpscreens & 127), native_rows);
 #endif
 
 #if !BADGER_DOOM

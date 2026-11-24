@@ -22,12 +22,14 @@ The `github_universe_badger` board builds `doom_tiny` for the **RP2350A** badge
 with the **296×128 monochrome E-Ink panel**. It keeps Doom's game timing and
 renders the entire view, status bar, and menus to the UC8151 panel. Normal
 movement uses a [differential waveform](https://github.com/antirez/uc8151_micropython)
-at the badge-compatible 100 Hz clock. The first frame when opening, switching,
-or leaving a menu, help page, or pause overlay uses a stronger repaint. Cursor
-moves repaint only the changed pixels. After eight HUD changes, the first frame
-with a steady playfield cleans just the HUD strip. The panel is busy for that
-update, but the playfield pixels are not driven. The long full refresh is used
-only at boot; no pause or cleanup shortcut is required. The port is single-player
+at the badge-compatible 100 Hz clock. Menu, help, and pause transitions
+use Pimoroni's stronger FAST waveform at the same clock (about 1.9 seconds
+per repaint). Selector moves use it only on changed pixels. A new or loaded
+level is repainted after the engine's wipe, not during it. After 128 normal
+gameplay updates, a steady view with buttons released for 1.5 seconds also
+gets one cleanup refresh. After eight HUD changes, a steady playfield allows
+a shorter HUD-only scrub; the panel is busy, but playfield pixels aren't driven.
+The long factory refresh is still boot-only. The port is single-player
 and silent; USB is for diagnostics and reflashing, not keyboard input.
 
 The Badger HUD uses native-resolution, undithered text and large numbers
@@ -46,6 +48,10 @@ Fuzzy spectres and fixed-colormap effects such as invulnerability retain
 their normal rendering. The automap uses a large heading arrow, solid walls,
 dashed height changes, and small crossbars on discovered doors. Secret doors
 still look like walls, and the map does not reveal new areas on open.
+
+The title uses a separate high-contrast grayscale palette. Save and Load
+show six numbered slots at native text height, with `EMPTY` for unused slots.
+Long names are shortened on screen without changing the stored name.
 
 ### Build and install
 

@@ -1,5 +1,5 @@
 /*
- * UC8151 setup derived from Pimoroni's conference firmware:
+ * UC8151 setup and FAST/TURBO waveforms from Pimoroni's conference firmware:
  * https://github.com/pimoroni/pimoroni-pico/blob/74cf9b7cacc050f2e6c62e5cd57d9067460c658b/drivers/uc8151/uc8151.cpp
  * Differential waveforms derived from antirez's UC8151 driver:
  * https://github.com/antirez/uc8151_micropython/blob/main/uc8151.py
@@ -46,7 +46,8 @@ enum {
     PANEL_BLOCK_BYTES = 8 * PANEL_COLUMN_BYTES,
     POWER_TIMEOUT_MS = 1000,
     BOOT_REFRESH_TIMEOUT_MS = 10000,
-    RUNTIME_REFRESH_TIMEOUT_MS = 2000,
+    SHORT_REFRESH_TIMEOUT_MS = 2000,
+    FAST_REFRESH_TIMEOUT_MS = 3000,
 };
 _Static_assert(FRAME_STRIDE * BADGER_HEIGHT == BADGER_FRAME_BYTES, "bad frame size");
 _Static_assert(FRAME_STRIDE * PANEL_BLOCK_BYTES == BADGER_FRAME_BYTES, "bad panel frame size");
@@ -69,7 +70,12 @@ enum {
 
 static enum { OFFLINE, READY, REFRESHING } display_state;
 static absolute_time_t refresh_deadline;
-static enum badger_update_mode active_waveform;
+static enum waveform {
+    WAVEFORM_DIFF,
+    WAVEFORM_FAST_CHANGED,
+    WAVEFORM_FAST_FULL,
+    WAVEFORM_TURBO_HUD,
+} active_waveform;
 
 // Last submitted panel-order image. It becomes the OLD plane for the next
 // update only after BUSY_N confirms the previous refresh completed.
@@ -116,15 +122,14 @@ static bool wait_idle(void)
     return true;
 }
 
-static void load_waveform(enum badger_update_mode mode)
+static void load_waveform(enum waveform mode)
 {
     // antirez's no-flickering speed 5 at 100 Hz. For transitions, drive
     // 16 frames of VDL for BW or VDH for WB, with VCOM at DC-VCOM.
     static const uint8_t diff_vcom[44] = {0x00, 4, 4, 4, 4, 1};
     static const uint8_t diff_bw[42] = {0x80, 16, 0, 0, 0, 1};
     static const uint8_t diff_wb[42] = {0x40, 16, 0, 0, 0, 1};
-    // Pimoroni TURBO at the same 100 Hz. Each transition ends at its
-    // target color regardless of the starting state (WW = BW; BB = WB).
+    // Pimoroni TURBO, retained for the shorter HUD-only scrub.
     static const uint8_t turbo_vcom[44] = {
         0x00, 1, 1, 2, 0, 1,
         0x00, 2, 2, 0, 0, 2,
@@ -140,18 +145,36 @@ static void load_waveform(enum badger_update_mode mode)
         0x60, 2, 2, 0, 0, 2,
         0x54, 2, 2, 3, 0, 2,
     };
+    // Pimoroni fast_luts(), without its 200 Hz PLL change. For a full
+    // clean, drive pixels by target color even when OLD and NEW agree.
+    static const uint8_t fast_vcom[44] = {
+        0x00, 4, 4, 7, 0, 1,
+        0x00, 12, 12, 0, 0, 2,
+        0x00, 4, 4, 7, 0, 2,
+    };
+    static const uint8_t fast_bw[42] = {
+        0x54, 4, 4, 7, 0, 1,
+        0x60, 12, 12, 0, 0, 2,
+        0xa8, 4, 4, 7, 0, 2,
+    };
+    static const uint8_t fast_wb[42] = {
+        0xa8, 4, 4, 7, 0, 1,
+        0x60, 12, 12, 0, 0, 2,
+        0x54, 4, 4, 7, 0, 2,
+    };
     static const uint8_t neutral[42] = {0};
-    const bool diff = mode == BADGER_UPDATE_DIFF;
-    const bool clean = mode == BADGER_UPDATE_CLEAN;
-    command(LUT_VCOM, diff ? diff_vcom : turbo_vcom, sizeof(turbo_vcom));
-    command(LUT_WW, clean ? turbo_bw : neutral, sizeof(neutral));
-    command(LUT_BW, diff ? diff_bw : turbo_bw, sizeof(turbo_bw));
-    command(LUT_WB, diff ? diff_wb : turbo_wb, sizeof(turbo_wb));
-    command(LUT_BB, clean ? turbo_wb : neutral, sizeof(neutral));
+    const bool diff = mode == WAVEFORM_DIFF;
+    const bool turbo = mode == WAVEFORM_TURBO_HUD;
+    const bool full = mode == WAVEFORM_FAST_FULL;
+    command(LUT_VCOM, diff ? diff_vcom : turbo ? turbo_vcom : fast_vcom, sizeof(fast_vcom));
+    command(LUT_WW, full ? fast_bw : neutral, sizeof(neutral));
+    command(LUT_BW, diff ? diff_bw : turbo ? turbo_bw : fast_bw, sizeof(fast_bw));
+    command(LUT_WB, diff ? diff_wb : turbo ? turbo_wb : fast_wb, sizeof(fast_wb));
+    command(LUT_BB, full ? fast_wb : neutral, sizeof(neutral));
     active_waveform = mode;
 }
 
-static void select_waveform(enum badger_update_mode mode)
+static void select_waveform(enum waveform mode)
 {
     if (mode != active_waveform) {
         load_waveform(mode);
@@ -289,7 +312,7 @@ bool badger_display_init(void)
     // submit never waits for a power-on cycle.
     command(PSR, (const uint8_t[]){PANEL_SETTINGS | LUT_FROM_REGISTERS}, 1);
     command(CDI, (const uint8_t[]){CDI_DIFFERENTIAL}, 1);
-    load_waveform(BADGER_UPDATE_DIFF);
+    load_waveform(WAVEFORM_DIFF);
     display_state = READY;
     return true;
 }
@@ -310,11 +333,12 @@ void badger_display_submit(const uint8_t *frame, enum badger_update_mode mode)
     if (display_state != READY) {
         return;
     }
-    select_waveform(mode);
+    select_waveform(mode == BADGER_UPDATE_DIFF ? WAVEFORM_DIFF :
+                    mode == BADGER_UPDATE_UI ? WAVEFORM_FAST_CHANGED : WAVEFORM_FAST_FULL);
     write_panel_plane(DTM1);
     pack_frame(frame, 0);
     write_panel_plane(DTM2);
-    start_refresh(RUNTIME_REFRESH_TIMEOUT_MS);
+    start_refresh(mode == BADGER_UPDATE_DIFF ? SHORT_REFRESH_TIMEOUT_MS : FAST_REFRESH_TIMEOUT_MS);
 }
 
 void badger_display_clean_hud(const uint8_t *frame, unsigned first_row)
@@ -322,7 +346,7 @@ void badger_display_clean_hud(const uint8_t *frame, unsigned first_row)
     if (display_state != READY || first_row >= BADGER_HEIGHT) {
         return;
     }
-    select_waveform(BADGER_UPDATE_UI);
+    select_waveform(WAVEFORM_TURBO_HUD);
     const unsigned first_byte = first_row / 8;
     // The boundary tile may also contain world rows; those match the
     // cached frame. Make only the HUD look changed in the OLD plane.
@@ -331,5 +355,5 @@ void badger_display_clean_hud(const uint8_t *frame, unsigned first_row)
     write_panel_plane(DTM1);
     invert_hud(first_byte, first_row);
     write_panel_plane(DTM2);
-    start_refresh(RUNTIME_REFRESH_TIMEOUT_MS);
+    start_refresh(SHORT_REFRESH_TIMEOUT_MS);
 }

@@ -272,7 +272,7 @@ static void M_DrawLoad(void);
 static void M_DrawSave(void);
 #endif
 
-#if !NO_USE_LOAD || !NO_USE_SAVE
+#if (!NO_USE_LOAD || !NO_USE_SAVE) && (!BADGER_DOOM || NET_MENU)
 static void M_DrawSaveLoadBorder(int x,int y, int l);
 #endif
 static void M_SetupNextMenu(menu_t *menudef);
@@ -649,6 +649,23 @@ menu_t  SaveDef =
 };
 
 #endif
+
+#if BADGER_DOOM
+boolean M_BadgerMenuNativeRows(void)
+{
+    if (!menuactive || messageToPrint)
+        return false;
+#if !NO_USE_LOAD
+    if (currentMenu == &LoadDef)
+        return true;
+#endif
+#if !NO_USE_SAVE
+    if (currentMenu == &SaveDef)
+        return true;
+#endif
+    return false;
+}
+#endif
 #if !NO_USE_LOAD
 //
 // M_ReadSaveStrings
@@ -693,6 +710,63 @@ void M_ReadSaveStrings(void)
 }
 #endif
 
+#if BADGER_DOOM && !NO_USE_LOAD
+enum {
+    BADGER_SLOT_NAME_X = 68,
+    // One overlay patch per glyph: leave room for all six rows and the footer.
+    BADGER_SLOT_NAME_CHARS = 16,
+    BADGER_SLOT_PREFIX_CHARS = BADGER_SLOT_NAME_CHARS - 3,
+};
+
+static void M_DrawBadgerSlotName(int y, const char *name, boolean editing)
+{
+    const char *end = memchr(name, '\0', SAVESTRINGSIZE);
+    size_t length = end ? end - name : SAVESTRINGSIZE;
+    char shortened[BADGER_SLOT_NAME_CHARS + 1];
+
+    if (length > BADGER_SLOT_NAME_CHARS)
+    {
+        if (editing)
+        {
+            // Keep the end of the name visible where input is being added.
+            memcpy(shortened, "...", 3);
+            memcpy(shortened + 3, name + length - BADGER_SLOT_PREFIX_CHARS,
+                   BADGER_SLOT_PREFIX_CHARS);
+        }
+        else
+        {
+            memcpy(shortened, name, BADGER_SLOT_PREFIX_CHARS);
+            memcpy(shortened + BADGER_SLOT_PREFIX_CHARS, "...", 3);
+        }
+        shortened[BADGER_SLOT_NAME_CHARS] = '\0';
+        name = shortened;
+    }
+
+    M_WriteText(BADGER_SLOT_NAME_X, y, name);
+    if (editing)
+        M_WriteText(BADGER_SLOT_NAME_X + M_StringWidth(name), y, "_");
+}
+
+static void M_DrawBadgerSlots(const char *title, int editing_slot)
+{
+    M_WriteText((SCREENWIDTH - M_StringWidth(title)) / 2, 74, title);
+    for (int slot = 0; slot < load_end; ++slot)
+    {
+        const int y = 95 + slot * 14;
+        const char number[] = { '1' + slot, '\0' };
+
+        if (slot == itemOn)
+            M_WriteText(30, y, ">");
+        M_WriteText(47, y, number);
+
+        if (slot == editing_slot || (LoadMenu[slot].status && savegamestrings[slot][0]))
+            M_DrawBadgerSlotName(y, savegamestrings[slot], slot == editing_slot);
+        else
+            M_WriteText(BADGER_SLOT_NAME_X, y, "EMPTY");
+    }
+}
+#endif
+
 
 #if !NO_USE_LOAD
 //
@@ -700,6 +774,9 @@ void M_ReadSaveStrings(void)
 //
 void M_DrawLoad(void)
 {
+#if BADGER_DOOM
+    M_DrawBadgerSlots("LOAD GAME", -1);
+#else
     int             i;
 	
     V_DrawPatchDirect(72, 28, VPATCH_HANDLE(VPATCH_NAME(M_LOADG)));
@@ -709,6 +786,7 @@ void M_DrawLoad(void)
 	M_DrawSaveLoadBorder(LoadDef.x,LoadDef.y+LINEHEIGHT*i, 24);
 	M_WriteText(LoadDef.x,LoadDef.y+LINEHEIGHT*i,savegamestrings[i]);
     }
+#endif
 }
 
 
@@ -718,6 +796,8 @@ void M_DrawLoad(void)
 #if !NO_USE_LOAD || !NO_USE_SAVE
 
 static char tempstring[90];
+
+#if !BADGER_DOOM || NET_MENU
 
 //
 // Draw border for the savegame description
@@ -745,6 +825,7 @@ void M_DrawSaveLoadBorder(int x,int y, int l)
     V_DrawPatchDirect(x, y + 7, 
                       VPATCH_HANDLE(VPATCH_NAME(M_LSRGHT)));
 }
+#endif
 
 #endif
 
@@ -793,6 +874,9 @@ void M_LoadGame (int choice)
 //
 void M_DrawSave(void)
 {
+#if BADGER_DOOM
+    M_DrawBadgerSlots("SAVE GAME", stringEntry ? saveSlot : -1);
+#else
     int             i;
 	
     V_DrawPatchDirect(72, 28, VPATCH_HANDLE(VPATCH_NAME(M_SAVEG)));
@@ -807,6 +891,7 @@ void M_DrawSave(void)
 	i = M_StringWidth(savegamestrings[saveSlot]);
 	M_WriteText(LoadDef.x + i,LoadDef.y+LINEHEIGHT*saveSlot,"_");
     }
+#endif
 }
 
 //
@@ -2507,6 +2592,15 @@ void M_Drawer (void)
 
     if (currentMenu->routine)
 	currentMenu->routine();         // call Draw routine
+
+#if BADGER_DOOM
+    if (M_BadgerMenuNativeRows())
+    {
+        M_DrawBadgerFooter(stringEntry ? "B: ACCEPT   UP+DOWN: CANCEL"
+                                       : "B: SELECT   UP+DOWN: BACK");
+        return;
+    }
+#endif
     
     // DRAW MENU
     x = currentMenu->x;

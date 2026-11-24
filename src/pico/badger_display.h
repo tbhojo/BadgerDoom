@@ -13,9 +13,9 @@
 bool badger_display_init(void);
 
 enum badger_update_mode {
-    BADGER_UPDATE_DIFF,  // Fast, changed pixels only
-    BADGER_UPDATE_UI,    // Balanced TURBO, changed pixels only
-    BADGER_UPDATE_CLEAN, // Balanced TURBO, all pixels
+    BADGER_UPDATE_DIFF,  // Differential, changed pixels only
+    BADGER_UPDATE_UI,    // Multiphase FAST, changed pixels only
+    BADGER_UPDATE_CLEAN, // Multiphase FAST, all pixels
 };
 
 // Poll regularly, even when the frame is unchanged. Never waits for BUSY.
