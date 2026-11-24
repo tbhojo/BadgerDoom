@@ -21,20 +21,20 @@ The original Chocolate Doom README is [here](README-chocolate.md).
 The `github_universe_badger` board builds `doom_tiny` for the **RP2350A** badge
 with the **296×128 monochrome E-Ink panel**. It keeps Doom's game timing and
 renders the entire view, status bar, and menus to the UC8151 panel. Normal
-updates use a [differential waveform](https://github.com/antirez/uc8151_micropython)
-at the badge-compatible 100 Hz controller clock, leaving unchanged pixels
-undriven. To clear ghosting, hold **A+C** and tap **Down** to pause. After
-at least 16 updates since the last clean, leaving the paused picture still
-for five seconds triggers one full refresh. Expect a flash and about five
-seconds before the panel can update again; the full refresh is not scheduled
-during gameplay. The port is single-player and silent; USB is for diagnostics
-and reflashing, not keyboard input.
+movement uses a [differential waveform](https://github.com/antirez/uc8151_micropython)
+at the badge-compatible 100 Hz clock. The first frame when opening, switching,
+or leaving a menu, help page, or pause overlay uses a stronger repaint. Cursor
+moves repaint only the changed pixels. After eight HUD changes, the first frame
+with a steady playfield cleans just the HUD strip. The panel is busy for that
+update, but the playfield pixels are not driven. The long full refresh is used
+only at boot; no pause or cleanup shortcut is required. The port is single-player
+and silent; USB is for diagnostics and reflashing, not keyboard input.
 
 The Badger HUD uses native-resolution, undithered text and large numbers
 for current-weapon ammo, health, and armor. `--` means the weapon does
 not use ammo; held red, yellow, and blue keys appear as `R`, `Y`, and `B`.
-The original Doomguy portrait reacts to health, damage, and other game
-events. It skips idle glances so a stationary picture can settle.
+The original Doomguy portrait sits at the center and reacts to health,
+damage, and other game events without animating its idle glances.
 Walkable step faces are brightened relative to the floor so the steps
 stand out without changing level geometry. In E1M1, the first room's
 side staircase is through the opening on your left as you enter.

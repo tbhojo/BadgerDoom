@@ -131,7 +131,8 @@ enum { BADGER_MENU_FOOTER_Y = SCREENHEIGHT - 16 };
 // The automap writes binary pixels before palette conversion.
 enum { BADGER_MAP_BLACK = 0, BADGER_MAP_WHITE = 4 };
 // The UI patches are the final entries in the completed overlay list.
-void I_SetBadgerOverlay(unsigned first_patch, boolean menu, boolean help);
+void I_SetBadgerOverlay(unsigned first_patch, const void *menu_page, uint8_t help_page,
+                        boolean pause, boolean help_transition);
 #endif
 #if !DEMO1_ONLY
 extern uint8_t *next_video_scroll;

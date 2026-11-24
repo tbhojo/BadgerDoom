@@ -198,6 +198,15 @@ vpatchname_t skullName[2] = {VPATCH_NAME(M_SKULL1), VPATCH_NAME(M_SKULL2)};
 
 // current menudef
 menu_t*	currentMenu;                          
+
+#if BADGER_DOOM
+const void *M_BadgerMenuPage(void)
+{
+    // Messages replace the menu, while the cursor only changes itemOn.
+    return messageToPrint ? (const void *)messageString : currentMenu;
+}
+#endif
+
 //
 // PROTOTYPES
 //

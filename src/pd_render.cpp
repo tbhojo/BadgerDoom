@@ -2716,6 +2716,9 @@ void pd_end_frame(int wipe_start) {
 #endif
     sem_acquire_blocking(&display_frame_freed);
     bool showing_help = inhelpscreens;
+#if BADGER_DOOM
+    const uint8_t help_page = inhelpscreens & 127;
+#endif
     static boolean was_in_help;
     if (gamestate == GS_LEVEL) {
         if (!wipestate && (!showing_help || !was_in_help)) render_frame_index ^= 1;
@@ -3052,7 +3055,8 @@ void pd_end_frame(int wipe_start) {
     // can give it a solid backdrop and preserve thin glyph strokes.
     auto *overlay = vpatchlists->overlays[render_overlay_index];
     const unsigned first_ui_patch = overlay->header.size;
-    if (paused && !menuactive && !inhelpscreens) {
+    const bool pause_overlay = paused && !menuactive && !inhelpscreens;
+    if (pause_overlay) {
         vpatch_handle_large_t handle = VPATCH_HANDLE(VPATCH_NAME(M_PAUSE));
         V_DrawPatchDirect((SCREENWIDTH - vpatch_width(resolve_vpatch_handle(handle))) / 2,
                           8, handle);
@@ -3060,7 +3064,9 @@ void pd_end_frame(int wipe_start) {
 #endif
     M_Drawer();
 #if BADGER_DOOM
-    I_SetBadgerOverlay(first_ui_patch, menuactive && !inhelpscreens, inhelpscreens != 0);
+    const void *menu_page = menuactive && !inhelpscreens ? M_BadgerMenuPage() : nullptr;
+    I_SetBadgerOverlay(first_ui_patch, menu_page, help_page, pause_overlay,
+                       help_page != (inhelpscreens & 127));
 #endif
 
 #if !BADGER_DOOM

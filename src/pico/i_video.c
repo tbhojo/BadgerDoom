@@ -56,13 +56,18 @@ static uint16_t ui_palette[256];
 static uint16_t menu_art_palette[256];
 static uint16_t ui_shared_pal[NUM_SHARED_PALETTES][16];
 static unsigned ui_first_patch;
-static bool ui_menu;
-static bool ui_help;
+static const void *ui_menu;
+static uint8_t ui_help;
+static bool ui_pause;
+static bool ui_help_transition;
 
-void I_SetBadgerOverlay(unsigned first_patch, boolean menu, boolean help) {
+void I_SetBadgerOverlay(unsigned first_patch, const void *menu_page, uint8_t help_page,
+                        boolean pause, boolean help_transition) {
     ui_first_patch = first_patch;
-    ui_menu = menu;
-    ui_help = help;
+    ui_menu = menu_page;
+    ui_help = help_page;
+    ui_pause = pause;
+    ui_help_transition = help_transition;
 }
 
 static void init_badger_menu_palettes(const uint8_t *playpal) {
@@ -1202,16 +1207,16 @@ static void badger_draw_hud(uint8_t *dest) {
 
     const player_t *player = &players[displayplayer];
     const ammotype_t ammo = weaponinfo[player->readyweapon].ammo;
-    badger_hud_label(dest, 5, 7, ammo_label, count_of(ammo_label));
+    badger_hud_label(dest, 4, 7, ammo_label, count_of(ammo_label));
     if (ammo == am_noammo) {
-        badger_hud_glyph(dest, 45, 3, HUD_DASH, true);
-        badger_hud_glyph(dest, 57, 3, HUD_DASH, true);
+        badger_hud_glyph(dest, 40, 3, HUD_DASH, true);
+        badger_hud_glyph(dest, 52, 3, HUD_DASH, true);
     } else {
-        badger_hud_number(dest, 57, player->ammo[ammo]);
+        badger_hud_number(dest, 52, player->ammo[ammo]);
     }
-    badger_hud_label(dest, 77, 7, health_label, count_of(health_label));
-    badger_hud_number(dest, 138, player->health);
-    badger_draw_face(dest, 152, 2);
+    badger_hud_label(dest, 65, 7, health_label, count_of(health_label));
+    badger_hud_number(dest, 126, player->health);
+    badger_draw_face(dest, (BADGER_WIDTH - 8 * BADGER_FACE_ROW_BYTES) / 2, 2);
     badger_hud_label(dest, 181, 7, armor_label, count_of(armor_label));
     badger_hud_number(dest, 238, player->armorpoints);
     badger_hud_label(dest, 266, 2, keys_label, count_of(keys_label));
@@ -1302,6 +1307,13 @@ void I_FinishUpdate(void) {
     static uint8_t frames[2][BADGER_FRAME_BYTES];
     static unsigned next;
     static bool submitted;
+    static const void *presented_menu;
+    static uint8_t presented_help;
+    static bool presented_pause;
+    static bool presented_hud;
+    static unsigned hud_changes;
+
+    enum { HUD_CLEAN_CHANGES = 8, PLAYFIELD_BYTES = BADGER_HUD_TOP * BADGER_HUD_PITCH };
 
     // Sampling is on core 0 between game frames. Core 1 only draws geometry;
     // the panel refreshes on its own while both cores render the next frame.
@@ -1310,7 +1322,12 @@ void I_FinishUpdate(void) {
     // The normal double-buffered level view (including automap and pause)
     // has a status-bar region. Leave full-screen artwork and wipes alone.
     const bool has_hud = display_video_type == VIDEO_TYPE_DOUBLE && gamestate == GS_LEVEL && !has_footer;
-    if (!badger_display_ready(has_hud && paused) || display_video_type < FIRST_VIDEO_TYPE_WITH_OVERLAYS) {
+    if (!badger_display_ready() || display_video_type < FIRST_VIDEO_TYPE_WITH_OVERLAYS) {
+        return;
+    }
+    // Help art is composed before M_Drawer selects its page and footer.
+    // Don't send the transitional frame with mismatched art and UI.
+    if (ui_help_transition) {
         return;
     }
 
@@ -1347,13 +1364,50 @@ void I_FinishUpdate(void) {
     }
     if (has_hud) badger_draw_hud(out);
 
-    if (!submitted || memcmp(frames[next], frames[next ^ 1], BADGER_FRAME_BYTES)) {
-        badger_display_submit(frames[next]);
-        next ^= 1;
-        if (!submitted) {
-            puts("Badger Doom: first game frame sent to panel");
-            submitted = true;
+    const uint8_t *frame = frames[next];
+    const uint8_t *previous = frames[next ^ 1];
+    const bool ui_boundary = ui_menu != presented_menu || ui_help != presented_help ||
+                             ui_pause != presented_pause;
+    bool changed = !submitted;
+    bool clean_hud = false;
+    if (submitted && !ui_boundary) {
+        if (has_hud && presented_hud && !ui_pause) {
+            const bool hud_changed = memcmp(frame + PLAYFIELD_BYTES, previous + PLAYFIELD_BYTES,
+                                            BADGER_FRAME_BYTES - PLAYFIELD_BYTES) != 0;
+            if (hud_changed && hud_changes < HUD_CLEAN_CHANGES) ++hud_changes;
+            // Count changes even during motion; once due, wait for the
+            // first frame whose playfield matches the last submission.
+            const bool scrub_due = hud_changes == HUD_CLEAN_CHANGES;
+            const bool playfield_changed = (!hud_changed || scrub_due) &&
+                                           memcmp(frame, previous, PLAYFIELD_BYTES) != 0;
+            changed = hud_changed || playfield_changed;
+            clean_hud = scrub_due && !playfield_changed;
+        } else {
+            changed = memcmp(frame, previous, BADGER_FRAME_BYTES) != 0;
         }
+    }
+    if (ui_boundary) {
+        badger_display_submit(frame, BADGER_UPDATE_CLEAN);
+        hud_changes = 0;
+    } else if (clean_hud) {
+        badger_display_clean_hud(frame, BADGER_HUD_TOP);
+        hud_changes = 0;
+    } else if (changed) {
+        badger_display_submit(frame, has_footer || ui_pause ? BADGER_UPDATE_UI : BADGER_UPDATE_DIFF);
+    } else {
+        return;
+    }
+
+    // A BUSY frame may be discarded before reaching here; compare with
+    // what was actually sent, not with every intermediate UI state.
+    next ^= 1;
+    presented_menu = ui_menu;
+    presented_help = ui_help;
+    presented_pause = ui_pause;
+    presented_hud = has_hud;
+    if (!submitted) {
+        puts("Badger Doom: first game frame sent to panel");
+        submitted = true;
     }
 }
 #else

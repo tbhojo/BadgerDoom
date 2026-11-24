@@ -12,13 +12,23 @@
 // Call all display functions from the same core.
 bool badger_display_init(void);
 
-// Poll regularly, even when the frame is unchanged. True if ready for a
-// new frame. Allows a deferred full clean only while the caller reports an
-// explicitly quiet state such as pause; this function never waits for BUSY.
-bool badger_display_ready(bool quiet);
+enum badger_update_mode {
+    BADGER_UPDATE_DIFF,  // Fast, changed pixels only
+    BADGER_UPDATE_UI,    // Balanced TURBO, changed pixels only
+    BADGER_UPDATE_CLEAN, // Balanced TURBO, all pixels
+};
 
-// Call only when ready. Copies a row-major, MSB-first frame (1 = white) to
-// the controller over SPI before returning. The panel refresh runs afterwards.
-void badger_display_submit(const uint8_t *frame);
+// Poll regularly, even when the frame is unchanged. Never waits for BUSY.
+bool badger_display_ready(void);
+
+// Call only when ready. Sends a row-major, MSB-first frame (1 = white)
+// over SPI; the refresh runs after return. Skip unchanged frames unless
+// requesting a whole-frame clean.
+void badger_display_submit(const uint8_t *frame, enum badger_update_mode mode);
+
+// Call only when ready and rows [0, first_row) match the last displayed frame.
+// Balanced TURBO drives rows [first_row, BADGER_HEIGHT) only. This still
+// occupies the panel for one full-window refresh.
+void badger_display_clean_hud(const uint8_t *frame, unsigned first_row);
 
 #endif

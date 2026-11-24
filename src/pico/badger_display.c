@@ -45,10 +45,8 @@ enum {
     PANEL_COLUMN_BYTES = BADGER_HEIGHT / 8,
     PANEL_BLOCK_BYTES = 8 * PANEL_COLUMN_BYTES,
     POWER_TIMEOUT_MS = 1000,
-    FULL_REFRESH_TIMEOUT_MS = 10000,
-    DIFFERENTIAL_REFRESH_TIMEOUT_MS = 2000,
-    IDLE_CLEAN_MIN_UPDATES = 16,
-    IDLE_CLEAN_DELAY_MS = 5000,
+    BOOT_REFRESH_TIMEOUT_MS = 10000,
+    RUNTIME_REFRESH_TIMEOUT_MS = 2000,
 };
 _Static_assert(FRAME_STRIDE * BADGER_HEIGHT == BADGER_FRAME_BYTES, "bad frame size");
 _Static_assert(FRAME_STRIDE * PANEL_BLOCK_BYTES == BADGER_FRAME_BYTES, "bad panel frame size");
@@ -69,11 +67,9 @@ enum {
     CDI_DIFFERENTIAL = 0xdc, // floating border, same porch
 };
 
-static enum { OFFLINE, READY, DIFFERENTIAL_REFRESHING, FULL_REFRESHING } display_state;
+static enum { OFFLINE, READY, REFRESHING } display_state;
 static absolute_time_t refresh_deadline;
-static absolute_time_t idle_clean_deadline;
-static unsigned updates_since_clean;
-static bool idle_clean_armed;
+static enum badger_update_mode active_waveform;
 
 // Last submitted panel-order image. It becomes the OLD plane for the next
 // update only after BUSY_N confirms the previous refresh completed.
@@ -120,22 +116,46 @@ static bool wait_idle(void)
     return true;
 }
 
-static void load_differential_waveform(void)
+static void load_waveform(enum badger_update_mode mode)
 {
-    // antirez's no-flickering speed 5 at 100 Hz. Drive only transitions:
+    // antirez's no-flickering speed 5 at 100 Hz. For transitions, drive
     // 16 frames of VDL for BW or VDH for WB, with VCOM at DC-VCOM.
-    // WW and BB stay neutral; reasserting either color would bias the panel.
-    static const uint8_t vcom[44] = {0x00, 4, 4, 4, 4, 1};
-    static const uint8_t bw[42] = {0x80, 16, 0, 0, 0, 1};
-    static const uint8_t wb[42] = {0x40, 16, 0, 0, 0, 1};
-    static const uint8_t unchanged[42] = {0};
-    command(PSR, (const uint8_t[]){PANEL_SETTINGS | LUT_FROM_REGISTERS}, 1);
-    command(CDI, (const uint8_t[]){CDI_DIFFERENTIAL}, 1);
-    command(LUT_VCOM, vcom, sizeof(vcom));
-    command(LUT_WW, unchanged, sizeof(unchanged));
-    command(LUT_BW, bw, sizeof(bw));
-    command(LUT_WB, wb, sizeof(wb));
-    command(LUT_BB, unchanged, sizeof(unchanged));
+    static const uint8_t diff_vcom[44] = {0x00, 4, 4, 4, 4, 1};
+    static const uint8_t diff_bw[42] = {0x80, 16, 0, 0, 0, 1};
+    static const uint8_t diff_wb[42] = {0x40, 16, 0, 0, 0, 1};
+    // Pimoroni TURBO at the same 100 Hz. Each transition ends at its
+    // target color regardless of the starting state (WW = BW; BB = WB).
+    static const uint8_t turbo_vcom[44] = {
+        0x00, 1, 1, 2, 0, 1,
+        0x00, 2, 2, 0, 0, 2,
+        0x00, 2, 2, 3, 0, 2,
+    };
+    static const uint8_t turbo_bw[42] = {
+        0x54, 1, 1, 2, 0, 1,
+        0x60, 2, 2, 0, 0, 2,
+        0xa8, 2, 2, 3, 0, 2,
+    };
+    static const uint8_t turbo_wb[42] = {
+        0xa8, 1, 1, 2, 0, 1,
+        0x60, 2, 2, 0, 0, 2,
+        0x54, 2, 2, 3, 0, 2,
+    };
+    static const uint8_t neutral[42] = {0};
+    const bool diff = mode == BADGER_UPDATE_DIFF;
+    const bool clean = mode == BADGER_UPDATE_CLEAN;
+    command(LUT_VCOM, diff ? diff_vcom : turbo_vcom, sizeof(turbo_vcom));
+    command(LUT_WW, clean ? turbo_bw : neutral, sizeof(neutral));
+    command(LUT_BW, diff ? diff_bw : turbo_bw, sizeof(turbo_bw));
+    command(LUT_WB, diff ? diff_wb : turbo_wb, sizeof(turbo_wb));
+    command(LUT_BB, clean ? turbo_wb : neutral, sizeof(neutral));
+    active_waveform = mode;
+}
+
+static void select_waveform(enum badger_update_mode mode)
+{
+    if (mode != active_waveform) {
+        load_waveform(mode);
+    }
 }
 
 static uint64_t transpose_tile(const uint8_t *src)
@@ -155,11 +175,11 @@ static uint64_t transpose_tile(const uint8_t *src)
     return tile ^ swap ^ (swap << 28);
 }
 
-static void pack_frame(const uint8_t *frame)
+static void pack_frame(const uint8_t *frame, unsigned first_byte)
 {
     for (unsigned x = 0; x < FRAME_STRIDE; ++x) {
         uint8_t *block = panel_frame + x * PANEL_BLOCK_BYTES;
-        for (unsigned y = 0; y < PANEL_COLUMN_BYTES; ++y) {
+        for (unsigned y = first_byte; y < PANEL_COLUMN_BYTES; ++y) {
             uint64_t tile = transpose_tile(frame + y * 8 * FRAME_STRIDE + x);
             // Each packed output byte holds eight vertical pixels, MSB first.
             for (unsigned col = 8; col-- > 0;) {
@@ -170,19 +190,32 @@ static void pack_frame(const uint8_t *frame)
     }
 }
 
+static void invert_hud(unsigned first_byte, unsigned first_row)
+{
+    // In portrait storage, landscape row 108 starts at the low nibble of
+    // byte 13 of each column. Flip only the selected bits, never row 107.
+    const uint8_t mask = 0xffu >> (first_row % 8);
+    for (unsigned x = 0; x < BADGER_WIDTH; ++x) {
+        uint8_t *column = panel_frame + x * PANEL_COLUMN_BYTES;
+        column[first_byte] ^= mask;
+        for (unsigned y = first_byte + 1; y < PANEL_COLUMN_BYTES; ++y) {
+            column[y] ^= 0xff;
+        }
+    }
+}
+
 static void write_panel_plane(uint8_t plane)
 {
     command(plane, panel_frame, sizeof(panel_frame));
     command_only(DSP);
 }
 
-static void start_refresh(bool full)
+static void start_refresh(unsigned timeout_ms)
 {
     gpio_acknowledge_irq(BADGER_PANEL_BUSY_PIN, GPIO_IRQ_EDGE_FALL);
     command_only(DRF);
-    refresh_deadline = make_timeout_time_ms(full ? FULL_REFRESH_TIMEOUT_MS
-                                                 : DIFFERENTIAL_REFRESH_TIMEOUT_MS);
-    display_state = full ? FULL_REFRESHING : DIFFERENTIAL_REFRESHING;
+    refresh_deadline = make_timeout_time_ms(timeout_ms);
+    display_state = REFRESHING;
 }
 
 static bool refresh_complete(void)
@@ -206,8 +239,6 @@ static bool panel_failed(void)
 bool badger_display_init(void)
 {
     display_state = OFFLINE;
-    updates_since_clean = 0;
-    idle_clean_armed = false;
     output_pin(BADGER_POWER_ENABLE_PIN, true);
     output_pin(BADGER_PANEL_CS_PIN, true);
     output_pin(BADGER_PANEL_DC_PIN, false);
@@ -235,8 +266,8 @@ bool badger_display_init(void)
     command(TSE, (const uint8_t[]){0x00}, 1);
     command(TCON, (const uint8_t[]){0x22}, 1);
     command(CDI, (const uint8_t[]){CDI_OTP}, 1);
-    // Keep this clock for both waveforms. At 200 Hz BUSY can complete
-    // without producing a visible partial update on the Universe badge.
+    // At 200 Hz BUSY can complete without producing a visible partial
+    // update on the Universe badge. Keep the 100 Hz clock for all modes.
     command(PLL, (const uint8_t[]){PLL_100_HZ}, 1);
     command_only(PON);
     sleep_ms(1);
@@ -247,7 +278,7 @@ bool badger_display_init(void)
     command_only(PTOU);
     memset(panel_frame, 0xff, sizeof(panel_frame));
     write_panel_plane(DTM2);
-    start_refresh(true);
+    start_refresh(BOOT_REFRESH_TIMEOUT_MS);
     while (!refresh_complete()) {
         if (time_reached(refresh_deadline)) {
             return panel_failed();
@@ -256,59 +287,49 @@ bool badger_display_init(void)
     }
     // As in the badge firmware, leave the booster on across game frames so
     // submit never waits for a power-on cycle.
-    load_differential_waveform();
+    command(PSR, (const uint8_t[]){PANEL_SETTINGS | LUT_FROM_REGISTERS}, 1);
+    command(CDI, (const uint8_t[]){CDI_DIFFERENTIAL}, 1);
+    load_waveform(BADGER_UPDATE_DIFF);
     display_state = READY;
     return true;
 }
 
-bool badger_display_ready(bool quiet)
+bool badger_display_ready(void)
 {
-    if (!quiet) {
-        idle_clean_armed = false;
-    }
-    if (display_state == DIFFERENTIAL_REFRESHING || display_state == FULL_REFRESHING) {
+    if (display_state == REFRESHING) {
         if (!refresh_complete()) {
             return time_reached(refresh_deadline) ? panel_failed() : false;
         }
-        if (display_state == FULL_REFRESHING) {
-            load_differential_waveform();
-            updates_since_clean = 0;
-        } else if (updates_since_clean < IDLE_CLEAN_MIN_UPDATES) {
-            ++updates_since_clean;
-        }
         display_state = READY;
     }
-    if (display_state != READY) {
-        return false;
-    }
-
-    // OTP takes seconds and cannot be interrupted. Only clean a settled
-    // frame during a quiet interval explicitly identified by the caller.
-    if (quiet && updates_since_clean >= IDLE_CLEAN_MIN_UPDATES) {
-        if (!idle_clean_armed) {
-            idle_clean_armed = true;
-            idle_clean_deadline = make_timeout_time_ms(IDLE_CLEAN_DELAY_MS);
-        } else if (time_reached(idle_clean_deadline)) {
-            idle_clean_armed = false;
-            command(PSR, (const uint8_t[]){PANEL_SETTINGS}, 1);
-            command(CDI, (const uint8_t[]){CDI_OTP}, 1);
-            write_panel_plane(DTM1);
-            write_panel_plane(DTM2);
-            start_refresh(true);
-            return false;
-        }
-    }
-    return true;
+    return display_state == READY;
 }
 
-void badger_display_submit(const uint8_t *frame)
+void badger_display_submit(const uint8_t *frame, enum badger_update_mode mode)
 {
     if (display_state != READY) {
         return;
     }
-    idle_clean_armed = false;
+    select_waveform(mode);
     write_panel_plane(DTM1);
-    pack_frame(frame);
+    pack_frame(frame, 0);
     write_panel_plane(DTM2);
-    start_refresh(false);
+    start_refresh(RUNTIME_REFRESH_TIMEOUT_MS);
+}
+
+void badger_display_clean_hud(const uint8_t *frame, unsigned first_row)
+{
+    if (display_state != READY || first_row >= BADGER_HEIGHT) {
+        return;
+    }
+    select_waveform(BADGER_UPDATE_UI);
+    const unsigned first_byte = first_row / 8;
+    // The boundary tile may also contain world rows; those match the
+    // cached frame. Make only the HUD look changed in the OLD plane.
+    pack_frame(frame, first_byte);
+    invert_hud(first_byte, first_row);
+    write_panel_plane(DTM1);
+    invert_hud(first_byte, first_row);
+    write_panel_plane(DTM2);
+    start_refresh(RUNTIME_REFRESH_TIMEOUT_MS);
 }
