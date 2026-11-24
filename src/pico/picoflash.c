@@ -1,3 +1,5 @@
+// Modified for Badger Doom (2026-11-23).
+
 /*
  * Copyright (c) 2020 Raspberry Pi (Trading) Ltd.
  *

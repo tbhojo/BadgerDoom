@@ -1,3 +1,5 @@
+# Modified for Badger Doom (2026-11-24).
+
 if (NOT PICO_ON_DEVICE)
     add_library(wad INTERFACE)
     target_sources(wad INTERFACE
@@ -17,6 +19,6 @@ if (NOT PICO_ON_DEVICE)
 
     target_compile_definitions(whd_gen PRIVATE IS_WHD_GEN=1)
 
-    target_include_directories(whd_gen PRIVATE .. ../doom)
+    target_include_directories(whd_gen PRIVATE . .. ../doom)
     target_link_libraries(whd_gen PRIVATE wad adpcm-lib)
 endif()

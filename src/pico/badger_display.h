@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+
 #ifndef BADGER_DISPLAY_H
 #define BADGER_DISPLAY_H
 

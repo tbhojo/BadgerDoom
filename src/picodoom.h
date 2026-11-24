@@ -1,3 +1,5 @@
+// Modified for Badger Doom (2026-11-23).
+
 #ifndef _PICODOOM_H
 #define _PICODOOM_H
 

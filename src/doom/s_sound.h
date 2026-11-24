@@ -1,3 +1,5 @@
+// Modified for Badger Doom (2026-11-23).
+
 //
 // Copyright(C) 1993-1996 Id Software, Inc.
 // Copyright(C) 2005-2014 Simon Howard

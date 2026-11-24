@@ -45,7 +45,8 @@ STRIFE*.pcx
 *~
 .#*
 .*.swp
-.DS_store
+.DS_Store
+/.vscode/
 
 # Ignore GNU Global tags and html files
 GPATH
@@ -54,6 +55,9 @@ GTAGS
 /HTML/
 *.midx
 *.midx.z
-*.wad
-*.whd
+*.[Ww][Aa][Dd]
+*.[Ww][Hh][Dd]
+*.[Ww][Hh][Xx]
+*.[Uu][Ff]2
+/badger-backup.bin
 /cmake-*/

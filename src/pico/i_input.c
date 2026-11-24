@@ -1,3 +1,5 @@
+// Modified for Badger Doom (2026-11-24).
+
 //
 // Copyright(C) 1993-1996 Id Software, Inc.
 // Copyright(C) 2005-2014 Simon Howard
@@ -799,6 +801,7 @@ void I_GetEventTimeout(int key_timeout) {
 #if BADGER_DOOM
     BadgerPollDoom();
 #elif PICO_ON_DEVICE && !NO_USE_UART
+    #ifdef uart_default
     if (uart_is_readable(uart_default)) {
         char c = uart_getc(uart_default);
         if (c == 26 && uart_is_readable_within_us(uart_default, key_timeout)) {
@@ -841,6 +844,7 @@ void I_GetEventTimeout(int key_timeout) {
             }
         }
     }
+    #endif
 #endif
 }
 

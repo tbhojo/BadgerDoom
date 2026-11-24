@@ -1,3 +1,5 @@
+# Modified for Badger Doom (2026-11-23).
+
 if (BADGER_DOOM)
     return()
 endif()

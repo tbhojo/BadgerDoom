@@ -1,3 +1,5 @@
+// Modified for Badger Doom (2026-11-23).
+
 //
 // Copyright(C) 1993-1996 Id Software, Inc.
 // Copyright(C) 2005-2014 Simon Howard
@@ -53,7 +55,12 @@ void D_DoomMain (void);
 
 #if PICO_ON_DEVICE && !BADGER_DOOM
 #include "pico/binary_info.h"
-bi_decl(bi_3pins_with_names(PICO_AUDIO_I2S_DATA_PIN, "I2S DIN", PICO_AUDIO_I2S_CLOCK_PIN_BASE, "I2S BCK", PICO_AUDIO_I2S_CLOCK_PIN_BASE+1, "I2S LRCK"));
+#ifdef PICO_AUDIO_I2S_DATA_PIN
+bi_decl(bi_3pins_with_names(
+  PICO_AUDIO_I2S_DATA_PIN, "I2S DIN",
+  PICO_AUDIO_I2S_CLOCK_PIN_BASE, "I2S BCK",
+  PICO_AUDIO_I2S_CLOCK_PIN_BASE+1, "I2S LRCK"));
+#endif
 #endif
 
 int main(int argc, char **argv)

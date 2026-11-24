@@ -1,3 +1,5 @@
+// Modified for Badger Doom (2026-11-24).
+
 /*
  * Copyright (c) 20222 Graham Sanderson
  *
@@ -34,7 +36,7 @@ template<typename H, typename BO=std::shared_ptr<byte_vector_bit_output>, bool D
         if (!huff.initialized()) {
             huff = stats.template create_huffman_encoding<H>();
         }
-        return huff.template decode(bi);
+        return huff.decode(bi);
     }
 
     void dump(bool force_debug = false) {

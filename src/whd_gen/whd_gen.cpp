@@ -1,3 +1,5 @@
+// Modified for Badger Doom (2026-11-24).
+
 /*
  * Copyright (c) 20222 Graham Sanderson
  *
@@ -757,7 +759,7 @@ T get_field(const std::vector<uint8_t> &data, int offset) {
 template<typename T>
 void append_field(std::vector<uint8_t> &data, const T &field) {
     const uint8_t *p = (uint8_t *) &field;
-    data.template insert(data.end(), p, p + sizeof(T));
+    data.insert(data.end(), p, p + sizeof(T));
 }
 
 template<typename T>

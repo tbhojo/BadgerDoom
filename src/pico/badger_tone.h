@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+
 #ifndef BADGER_TONE_H
 #define BADGER_TONE_H
 

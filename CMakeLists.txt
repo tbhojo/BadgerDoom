@@ -1,6 +1,13 @@
+# Modified for Badger Doom (2026-11-23).
+
 set(CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
 cmake_minimum_required(VERSION 3.13)
+
+option(BUILD_WHD_GEN_ONLY "Build only the native WAD-to-WHX converter (no SDL)" OFF)
+if (BUILD_WHD_GEN_ONLY AND PICO_SDK_PATH)
+    message(FATAL_ERROR "Build whd_gen in a separate native directory without PICO_SDK_PATH")
+endif()
 
 # We use PICO_SDK_PATH being set as an indicator that we're doing a Pico BUILD
 if (PICO_SDK_PATH)
@@ -62,7 +69,7 @@ else()
 endif()
 
 # Note PICO_SDK path is set by the SDK initialization if it occurs above
-if (NOT PICO_SDK)
+if (NOT PICO_SDK AND NOT BUILD_WHD_GEN_ONLY)
     find_package(SDL2 2.0.1 REQUIRED)
     find_package(SDL2_mixer 2.0.0 REQUIRED)
     find_package(SDL2_net 2.0.0 REQUIRED)
@@ -99,6 +106,12 @@ string(TOLOWER "${PACKAGE_SHORTNAME}" PROGRAM_SPREFIX)
 set(PROGRAM_PREFIX "${PROGRAM_SPREFIX}-")
 
 configure_file(cmake/config.h.cin config.h)
+
+if (BUILD_WHD_GEN_ONLY)
+    add_subdirectory(src/adpcm-xq)
+    add_subdirectory(src/whd_gen)
+    return()
+endif()
 
 configure_file(src/resource.rc.in src/resource.rc)
 configure_file(src/setup-res.rc.in src/setup-res.rc)

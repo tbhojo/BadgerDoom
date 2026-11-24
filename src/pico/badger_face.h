@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+
 #ifndef BADGER_FACE_H
 #define BADGER_FACE_H
 

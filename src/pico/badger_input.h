@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+
 #ifndef BADGER_INPUT_H
 #define BADGER_INPUT_H
 

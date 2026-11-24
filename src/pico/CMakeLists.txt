@@ -1,3 +1,5 @@
+# Modified for Badger Doom (2026-11-23).
+
 add_library(common_pico INTERFACE)
 target_sources(common_pico INTERFACE
         ${CMAKE_CURRENT_LIST_DIR}/i_glob.c
