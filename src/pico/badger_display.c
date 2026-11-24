@@ -1,7 +1,7 @@
 /*
  * UC8151 setup and FAST/TURBO waveforms from Pimoroni's conference firmware:
  * https://github.com/pimoroni/pimoroni-pico/blob/74cf9b7cacc050f2e6c62e5cd57d9067460c658b/drivers/uc8151/uc8151.cpp
- * Differential waveforms derived from antirez's UC8151 driver:
+ * Differential and maintenance waveforms derived from antirez's UC8151 driver:
  * https://github.com/antirez/uc8151_micropython/blob/main/uc8151.py
  *
  * MIT License
@@ -44,6 +44,7 @@ enum {
     FRAME_STRIDE = BADGER_WIDTH / 8,
     PANEL_COLUMN_BYTES = BADGER_HEIGHT / 8,
     PANEL_BLOCK_BYTES = 8 * PANEL_COLUMN_BYTES,
+    UI_SCRUB_PAD = 3,
     POWER_TIMEOUT_MS = 1000,
     BOOT_REFRESH_TIMEOUT_MS = 10000,
     SHORT_REFRESH_TIMEOUT_MS = 2000,
@@ -72,6 +73,7 @@ static enum { OFFLINE, READY, REFRESHING } display_state;
 static absolute_time_t refresh_deadline;
 static enum waveform {
     WAVEFORM_DIFF,
+    WAVEFORM_MAINTENANCE,
     WAVEFORM_FAST_CHANGED,
     WAVEFORM_FAST_FULL,
     WAVEFORM_TURBO_HUD,
@@ -129,6 +131,14 @@ static void load_waveform(enum waveform mode)
     static const uint8_t diff_vcom[44] = {0x00, 4, 4, 4, 4, 1};
     static const uint8_t diff_bw[42] = {0x80, 16, 0, 0, 0, 1};
     static const uint8_t diff_wb[42] = {0x40, 16, 0, 0, 0, 1};
+    // antirez's full speed 4 at 100 Hz (p=8). WW/BB each spend 16 frames
+    // at the opposite polarity, then 16 at the target. BW/WB instead drive
+    // the target for all 32 frames, with matching durations for both colors.
+    static const uint8_t maintenance_vcom[44] = {0x00,  8,  8, 8, 8, 1};
+    static const uint8_t maintenance_ww[42] =   {0x60, 16, 16, 0, 0, 1};
+    static const uint8_t maintenance_bw[42] =   {0x80, 32,  0, 0, 0, 1};
+    static const uint8_t maintenance_wb[42] =   {0x40, 32,  0, 0, 0, 1};
+    static const uint8_t maintenance_bb[42] =   {0x90, 16, 16, 0, 0, 1};
     // Pimoroni TURBO, retained for the shorter HUD-only scrub.
     static const uint8_t turbo_vcom[44] = {
         0x00, 1, 1, 2, 0, 1,
@@ -163,14 +173,22 @@ static void load_waveform(enum waveform mode)
         0x54, 4, 4, 7, 0, 2,
     };
     static const uint8_t neutral[42] = {0};
-    const bool diff = mode == WAVEFORM_DIFF;
-    const bool turbo = mode == WAVEFORM_TURBO_HUD;
-    const bool full = mode == WAVEFORM_FAST_FULL;
-    command(LUT_VCOM, diff ? diff_vcom : turbo ? turbo_vcom : fast_vcom, sizeof(fast_vcom));
-    command(LUT_WW, full ? fast_bw : neutral, sizeof(neutral));
-    command(LUT_BW, diff ? diff_bw : turbo ? turbo_bw : fast_bw, sizeof(fast_bw));
-    command(LUT_WB, diff ? diff_wb : turbo ? turbo_wb : fast_wb, sizeof(fast_wb));
-    command(LUT_BB, full ? fast_wb : neutral, sizeof(neutral));
+    if (mode == WAVEFORM_MAINTENANCE) {
+        command(LUT_VCOM, maintenance_vcom, sizeof(maintenance_vcom));
+        command(LUT_WW, maintenance_ww, sizeof(maintenance_ww));
+        command(LUT_BW, maintenance_bw, sizeof(maintenance_bw));
+        command(LUT_WB, maintenance_wb, sizeof(maintenance_wb));
+        command(LUT_BB, maintenance_bb, sizeof(maintenance_bb));
+    } else {
+        const bool diff = mode == WAVEFORM_DIFF;
+        const bool turbo = mode == WAVEFORM_TURBO_HUD;
+        const bool full = mode == WAVEFORM_FAST_FULL;
+        command(LUT_VCOM, diff ? diff_vcom : turbo ? turbo_vcom : fast_vcom, sizeof(fast_vcom));
+        command(LUT_WW, full ? fast_bw : neutral, sizeof(neutral));
+        command(LUT_BW, diff ? diff_bw : turbo ? turbo_bw : fast_bw, sizeof(fast_bw));
+        command(LUT_WB, diff ? diff_wb : turbo ? turbo_wb : fast_wb, sizeof(fast_wb));
+        command(LUT_BB, full ? fast_wb : neutral, sizeof(neutral));
+    }
     active_waveform = mode;
 }
 
@@ -198,11 +216,13 @@ static uint64_t transpose_tile(const uint8_t *src)
     return tile ^ swap ^ (swap << 28);
 }
 
-static void pack_frame(const uint8_t *frame, unsigned first_byte)
+// Bounds are half-open in 8x8 tiles.
+static void pack_frame(const uint8_t *frame, unsigned x_begin, unsigned y_begin,
+                       unsigned x_end, unsigned y_end)
 {
-    for (unsigned x = 0; x < FRAME_STRIDE; ++x) {
+    for (unsigned x = x_begin; x < x_end; ++x) {
         uint8_t *block = panel_frame + x * PANEL_BLOCK_BYTES;
-        for (unsigned y = first_byte; y < PANEL_COLUMN_BYTES; ++y) {
+        for (unsigned y = y_begin; y < y_end; ++y) {
             uint64_t tile = transpose_tile(frame + y * 8 * FRAME_STRIDE + x);
             // Each packed output byte holds eight vertical pixels, MSB first.
             for (unsigned col = 8; col-- > 0;) {
@@ -213,17 +233,27 @@ static void pack_frame(const uint8_t *frame, unsigned first_byte)
     }
 }
 
-static void invert_hud(unsigned first_byte, unsigned first_row)
+// Flip the half-open landscape rectangle in the packed portrait plane.
+static void invert_rect(unsigned left, unsigned top, unsigned right, unsigned bottom)
 {
-    // In portrait storage, landscape row 108 starts at the low nibble of
-    // byte 13 of each column. Flip only the selected bits, never row 107.
-    const uint8_t mask = 0xffu >> (first_row % 8);
-    for (unsigned x = 0; x < BADGER_WIDTH; ++x) {
+    const unsigned first_byte = top / 8;
+    const unsigned last_byte = (bottom - 1) / 8;
+    const uint8_t first_mask = 0xffu >> (top % 8);
+    const uint8_t last_mask = (uint8_t)(0xffu << (7 - (bottom - 1) % 8));
+    if (first_byte == last_byte) {
+        const uint8_t mask = first_mask & last_mask;
+        for (unsigned x = left; x < right; ++x) {
+            panel_frame[x * PANEL_COLUMN_BYTES + first_byte] ^= mask;
+        }
+        return;
+    }
+    for (unsigned x = left; x < right; ++x) {
         uint8_t *column = panel_frame + x * PANEL_COLUMN_BYTES;
-        column[first_byte] ^= mask;
-        for (unsigned y = first_byte + 1; y < PANEL_COLUMN_BYTES; ++y) {
+        column[first_byte] ^= first_mask;
+        for (unsigned y = first_byte + 1; y < last_byte; ++y) {
             column[y] ^= 0xff;
         }
+        column[last_byte] ^= last_mask;
     }
 }
 
@@ -334,11 +364,61 @@ void badger_display_submit(const uint8_t *frame, enum badger_update_mode mode)
         return;
     }
     select_waveform(mode == BADGER_UPDATE_DIFF ? WAVEFORM_DIFF :
-                    mode == BADGER_UPDATE_UI ? WAVEFORM_FAST_CHANGED : WAVEFORM_FAST_FULL);
+                    mode == BADGER_UPDATE_MAINTENANCE ? WAVEFORM_MAINTENANCE : WAVEFORM_FAST_FULL);
     write_panel_plane(DTM1);
-    pack_frame(frame, 0);
+    pack_frame(frame, 0, 0, FRAME_STRIDE, PANEL_COLUMN_BYTES);
     write_panel_plane(DTM2);
-    start_refresh(mode == BADGER_UPDATE_DIFF ? SHORT_REFRESH_TIMEOUT_MS : FAST_REFRESH_TIMEOUT_MS);
+    start_refresh(mode == BADGER_UPDATE_CLEAN ? FAST_REFRESH_TIMEOUT_MS : SHORT_REFRESH_TIMEOUT_MS);
+}
+
+void badger_display_submit_ui(const uint8_t *frame, const uint8_t *previous)
+{
+    if (display_state != READY) {
+        return;
+    }
+    unsigned left = BADGER_WIDTH, top = BADGER_HEIGHT;
+    unsigned right = 0, bottom = 0;
+    for (unsigned y = 0; y < BADGER_HEIGHT; ++y) {
+        for (unsigned byte = 0; byte < FRAME_STRIDE; ++byte) {
+            const unsigned offset = y * FRAME_STRIDE + byte;
+            const unsigned diff = frame[offset] ^ previous[offset];
+            if (!diff) continue;
+            if (y < top) top = y;
+            bottom = y + 1;
+
+            // Bit 7 is leftmost. Only examine bits in bytes that can
+            // extend an edge beyond the current bounds.
+            const unsigned x = byte * 8;
+            if (x < left) {
+                const unsigned first = x + __builtin_clz(diff << 24);
+                if (first < left) left = first;
+            }
+            if (x + 8 > right) {
+                const unsigned after = x + 8 - __builtin_ctz(diff);
+                if (after > right) right = after;
+            }
+        }
+    }
+    if (bottom == 0) {
+        return;
+    }
+
+    select_waveform(WAVEFORM_FAST_CHANGED);
+    // Only the tiles intersecting the difference need repacking. All
+    // other cached pixels (including in the margin) already match NEW.
+    pack_frame(frame, left / 8, top / 8, (right + 7) / 8, (bottom + 7) / 8);
+    left = left > UI_SCRUB_PAD ? left - UI_SCRUB_PAD : 0;
+    top = top > UI_SCRUB_PAD ? top - UI_SCRUB_PAD : 0;
+    right = right < BADGER_WIDTH - UI_SCRUB_PAD ? right + UI_SCRUB_PAD : BADGER_WIDTH;
+    bottom = bottom < BADGER_HEIGHT - UI_SCRUB_PAD ? bottom + UI_SCRUB_PAD : BADGER_HEIGHT;
+
+    // Present the opposite OLD color only inside the padded rectangle so
+    // FAST drives its background too. Outside it, the WW/BB LUTs are zero.
+    invert_rect(left, top, right, bottom);
+    write_panel_plane(DTM1);
+    invert_rect(left, top, right, bottom);
+    write_panel_plane(DTM2);
+    start_refresh(FAST_REFRESH_TIMEOUT_MS);
 }
 
 void badger_display_clean_hud(const uint8_t *frame, unsigned first_row)
@@ -350,10 +430,10 @@ void badger_display_clean_hud(const uint8_t *frame, unsigned first_row)
     const unsigned first_byte = first_row / 8;
     // The boundary tile may also contain world rows; those match the
     // cached frame. Make only the HUD look changed in the OLD plane.
-    pack_frame(frame, first_byte);
-    invert_hud(first_byte, first_row);
+    pack_frame(frame, 0, first_byte, FRAME_STRIDE, PANEL_COLUMN_BYTES);
+    invert_rect(0, first_row, BADGER_WIDTH, BADGER_HEIGHT);
     write_panel_plane(DTM1);
-    invert_hud(first_byte, first_row);
+    invert_rect(0, first_row, BADGER_WIDTH, BADGER_HEIGHT);
     write_panel_plane(DTM2);
     start_refresh(SHORT_REFRESH_TIMEOUT_MS);
 }

@@ -55,6 +55,7 @@ enum { UI_WHITE = 0x8000 };
 
 static uint16_t ui_palette[256];
 static uint16_t menu_art_palette[256];
+static uint16_t slot_border_palette[256];
 static uint8_t title_palette[256];
 static uint16_t ui_shared_pal[NUM_SHARED_PALETTES][16];
 static unsigned ui_first_patch;
@@ -82,6 +83,9 @@ static void init_badger_menu_palettes(const uint8_t *playpal) {
         // Text rejects Doom's dark drop shadows. The logo keeps all its tones.
         ui_palette[i] = luma + lift / 512 >= 40 ? UI_WHITE : 0;
         menu_art_palette[i] = luma + lift / 256;
+        // Flip the original slot's dark bevel to white, not its lighter
+        // recessed center. Slot names stay white on a plain black field.
+        slot_border_palette[i] = luma <= 32 ? UI_WHITE : 0;
         // Title art's blues vanish under the scene weights. Give them a
         // wider range, keep warm highlights bright, and retain true black.
         const unsigned r = rgb[0], g = rgb[1], b = rgb[2];
@@ -704,7 +708,21 @@ static void scanline_func_wipe(uint32_t *dest, int scanline) {
 static inline uint draw_vpatch(uint16_t *dest, patch_t *patch, vpatchlist_t *vp, uint off, bool ui) {
     const uint16_t *colors = palette;
 #if BADGER_DOOM
-    if (ui) colors = vp->entry.patch_handle == VPATCH_M_DOOM ? menu_art_palette : ui_palette;
+    if (ui) {
+        switch (vp->entry.patch_handle) {
+            case VPATCH_M_DOOM:
+                colors = menu_art_palette;
+                break;
+            case VPATCH_M_LSLEFT:
+            case VPATCH_M_LSCNTR:
+            case VPATCH_M_LSRGHT:
+                colors = slot_border_palette;
+                break;
+            default:
+                colors = ui_palette;
+                break;
+        }
+    }
 #endif
     int repeat = vp->entry.repeat;
     dest += vp->entry.x;
@@ -1338,14 +1356,16 @@ void I_FinishUpdate(void) {
 
     enum {
         HUD_CLEAN_CHANGES = 8,
-        GAMEPLAY_CLEAN_UPDATES = 128,
-        GAMEPLAY_IDLE_US = 1500000,
+        GAMEPLAY_IDLE_UPDATES = 24,
+        GAMEPLAY_FORCE_UPDATES = 48,
+        GAMEPLAY_IDLE_US = 500000,
         PLAYFIELD_BYTES = BADGER_HUD_TOP * BADGER_HUD_PITCH,
     };
 
     // Sampling is on core 0 between game frames. Core 1 only draws geometry;
     // the panel refreshes on its own while both cores render the next frame.
     const bool finishing_wipe = display_video_type == VIDEO_TYPE_WIPE;
+    const bool fresh_frame = sem_available(&render_frame_ready);
     new_frame_stuff();
     const bool ready = badger_display_ready();
     if (display_video_type == VIDEO_TYPE_WIPE && gamestate == GS_LEVEL && usergame) {
@@ -1354,7 +1374,7 @@ void I_FinishUpdate(void) {
     // Keep the last physical image through the outgoing frame and the melt.
     // Its last pass switches video type before a normal view has been drawn.
     // Also wait for help art and its overlay to agree before presenting it.
-    if (pre_wipe_state || finishing_wipe || display_video_type == VIDEO_TYPE_WIPE ||
+    if (!fresh_frame || pre_wipe_state || finishing_wipe || display_video_type == VIDEO_TYPE_WIPE ||
         display_video_type < FIRST_VIDEO_TYPE_WITH_OVERLAYS || ui_help_transition) {
         idle_since = 0;
         return;
@@ -1368,8 +1388,11 @@ void I_FinishUpdate(void) {
     const bool boundary_clean = (level_clean_pending && has_hud) ||
                                 ui_menu != presented_menu || ui_help != presented_help ||
                                 ui_pause != presented_pause;
-    const bool watch_idle = gameplay && !boundary_clean &&
-                            gameplay_updates == GAMEPLAY_CLEAN_UPDATES && !badger_buttons_raw();
+    // Prefer a quiet scene, but cap the number of world updates even while moving.
+    const bool force_maintenance = gameplay && !boundary_clean &&
+                                   gameplay_updates >= GAMEPLAY_FORCE_UPDATES;
+    const bool watch_idle = gameplay && !boundary_clean && !force_maintenance &&
+                            gameplay_updates >= GAMEPLAY_IDLE_UPDATES && !badger_buttons_raw();
     if (!watch_idle) idle_since = 0;
     // Once due, observe the scene even during BUSY so a transient change
     // that was not submitted still interrupts the required quiet interval.
@@ -1407,31 +1430,31 @@ void I_FinishUpdate(void) {
         }
         out += BADGER_HUD_PITCH;
     }
-    if (has_hud) badger_draw_hud(out);
 
     const uint8_t *frame = frames[next];
     const uint8_t *previous = frames[next ^ 1];
-    bool scene_changed = false;
-    bool idle_clean = false;
+    bool playfield_changed = false;
+    bool idle_maintenance = false;
     if (watch_idle) {
-        scene_changed = memcmp(frame, previous, PLAYFIELD_BYTES) != 0;
-        if (scene_changed) {
+        playfield_changed = memcmp(frame, previous, PLAYFIELD_BYTES) != 0;
+        if (playfield_changed) {
             idle_since = 0;
         } else {
             const uint64_t now = time_us_64();
             if (!idle_since) idle_since = now;
             if (ready && now - idle_since >= GAMEPLAY_IDLE_US) {
-                idle_clean = !badger_buttons_raw();
-                if (!idle_clean) idle_since = 0;
+                idle_maintenance = !badger_buttons_raw();
+                if (!idle_maintenance) idle_since = 0;
             }
         }
     }
     if (!ready) return;
+    if (has_hud) badger_draw_hud(out);
 
-    const bool clean = boundary_clean || idle_clean;
+    const bool maintenance = force_maintenance || idle_maintenance;
     bool changed = !submitted;
     bool clean_hud = false;
-    if (!clean && submitted) {
+    if (!boundary_clean && !maintenance && submitted) {
         if (has_hud && presented_hud && !ui_pause) {
             const bool hud_changed = memcmp(frame + PLAYFIELD_BYTES, previous + PLAYFIELD_BYTES,
                                             BADGER_FRAME_BYTES - PLAYFIELD_BYTES) != 0;
@@ -1439,17 +1462,17 @@ void I_FinishUpdate(void) {
             // Count changes even during motion; once due, wait for the
             // first frame whose playfield matches the last submission.
             const bool scrub_due = hud_changes == HUD_CLEAN_CHANGES;
-            const bool playfield_changed = watch_idle ? scene_changed :
-                                           ((!hud_changed || scrub_due) &&
-                                            memcmp(frame, previous, PLAYFIELD_BYTES) != 0);
+            if (!watch_idle && (gameplay || !hud_changed || scrub_due)) {
+                playfield_changed = memcmp(frame, previous, PLAYFIELD_BYTES) != 0;
+            }
             changed = hud_changed || playfield_changed;
             clean_hud = scrub_due && !playfield_changed;
         } else {
             changed = memcmp(frame, previous, BADGER_FRAME_BYTES) != 0;
         }
     }
-    if (clean) {
-        badger_display_submit(frame, BADGER_UPDATE_CLEAN);
+    if (boundary_clean || maintenance) {
+        badger_display_submit(frame, boundary_clean ? BADGER_UPDATE_CLEAN : BADGER_UPDATE_MAINTENANCE);
         hud_changes = 0;
         level_clean_pending = false;
         gameplay_updates = 0;
@@ -1458,8 +1481,16 @@ void I_FinishUpdate(void) {
         badger_display_clean_hud(frame, BADGER_HUD_TOP);
         hud_changes = 0;
     } else if (changed) {
-        badger_display_submit(frame, has_footer || ui_pause ? BADGER_UPDATE_UI : BADGER_UPDATE_DIFF);
-        if (gameplay && gameplay_updates < GAMEPLAY_CLEAN_UPDATES) ++gameplay_updates;
+        if (has_footer || ui_pause) {
+            badger_display_submit_ui(frame, previous);
+            hud_changes = 0;
+            gameplay_updates = 0;
+            idle_since = 0;
+        } else {
+            badger_display_submit(frame, BADGER_UPDATE_DIFF);
+            // Pure HUD traffic does not age the differential playfield.
+            if (gameplay && playfield_changed) ++gameplay_updates;
+        }
     } else {
         return;
     }

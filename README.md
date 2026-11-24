@@ -24,11 +24,12 @@ renders the entire view, status bar, and menus to the UC8151 panel. Normal
 movement uses a [differential waveform](https://github.com/antirez/uc8151_micropython)
 at the badge-compatible 100 Hz clock. Menu, help, and pause transitions
 use Pimoroni's stronger FAST waveform at the same clock (about 1.9 seconds
-per repaint). Selector moves use it only on changed pixels. A new or loaded
-level is repainted after the engine's wipe, not during it. After 128 normal
-gameplay updates, a steady view with buttons released for 1.5 seconds also
-gets one cleanup refresh. After eight HUD changes, a steady playfield allows
-a shorter HUD-only scrub; the panel is busy, but playfield pixels aren't driven.
+per repaint). A selector move refreshes the old and new positions plus a
+three-pixel margin, not the rest of the menu. A new or loaded level is repainted
+after the engine's wipe. A shorter charge-balanced recovery runs after 24
+changing gameplay frames when the view is steady and buttons are released for
+half a second, or after 48 changing frames if play continues. The shorter
+HUD-only scrub still runs after eight HUD changes on a steady playfield.
 The long factory refresh is still boot-only. The port is single-player
 and silent; USB is for diagnostics and reflashing, not keyboard input.
 
@@ -50,8 +51,9 @@ dashed height changes, and small crossbars on discovered doors. Secret doors
 still look like walls, and the map does not reveal new areas on open.
 
 The title uses a separate high-contrast grayscale palette. Save and Load
-show six numbered slots at native text height, with `EMPTY` for unused slots.
-Long names are shortened on screen without changing the stored name.
+use Doom's original headings, beveled slot frames, and skull cursor. Slot
+names and `EMPTY` labels stay at native text height; long names are shortened
+on screen without changing the stored name.
 
 ### Build and install
 

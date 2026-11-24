@@ -272,7 +272,7 @@ static void M_DrawLoad(void);
 static void M_DrawSave(void);
 #endif
 
-#if (!NO_USE_LOAD || !NO_USE_SAVE) && (!BADGER_DOOM || NET_MENU)
+#if !NO_USE_LOAD || !NO_USE_SAVE
 static void M_DrawSaveLoadBorder(int x,int y, int l);
 #endif
 static void M_SetupNextMenu(menu_t *menudef);
@@ -712,7 +712,8 @@ void M_ReadSaveStrings(void)
 
 #if BADGER_DOOM && !NO_USE_LOAD
 enum {
-    BADGER_SLOT_NAME_X = 68,
+    BADGER_SLOT_FRAME_X = 66,
+    BADGER_SLOT_NAME_X = 90,
     // One overlay patch per glyph: leave room for all six rows and the footer.
     BADGER_SLOT_NAME_CHARS = 16,
     BADGER_SLOT_PREFIX_CHARS = BADGER_SLOT_NAME_CHARS - 3,
@@ -747,17 +748,19 @@ static void M_DrawBadgerSlotName(int y, const char *name, boolean editing)
         M_WriteText(BADGER_SLOT_NAME_X + M_StringWidth(name), y, "_");
 }
 
-static void M_DrawBadgerSlots(const char *title, int editing_slot)
+static void M_DrawBadgerSlots(vpatch_handle_large_t title, int editing_slot)
 {
-    M_WriteText((SCREENWIDTH - M_StringWidth(title)) / 2, 74, title);
+    V_DrawPatchDirect((SCREENWIDTH - vpatch_width(resolve_vpatch_handle(title))) / 2,
+                      70, title);
     for (int slot = 0; slot < load_end; ++slot)
     {
-        const int y = 95 + slot * 14;
+        const int y = 94 + slot * 15;
         const char number[] = { '1' + slot, '\0' };
 
+        M_DrawSaveLoadBorder(BADGER_SLOT_FRAME_X, y, 26);
         if (slot == itemOn)
-            M_WriteText(30, y, ">");
-        M_WriteText(47, y, number);
+            V_DrawPatchDirect(29, y - 7, VPATCH_HANDLE(VPATCH_NAME(M_SKULL1)));
+        M_WriteText(72, y, number);
 
         if (slot == editing_slot || (LoadMenu[slot].status && savegamestrings[slot][0]))
             M_DrawBadgerSlotName(y, savegamestrings[slot], slot == editing_slot);
@@ -775,7 +778,7 @@ static void M_DrawBadgerSlots(const char *title, int editing_slot)
 void M_DrawLoad(void)
 {
 #if BADGER_DOOM
-    M_DrawBadgerSlots("LOAD GAME", -1);
+    M_DrawBadgerSlots(VPATCH_HANDLE(VPATCH_NAME(M_LOADG)), -1);
 #else
     int             i;
 	
@@ -797,14 +800,14 @@ void M_DrawLoad(void)
 
 static char tempstring[90];
 
-#if !BADGER_DOOM || NET_MENU
-
 //
 // Draw border for the savegame description
 //
 void M_DrawSaveLoadBorder(int x,int y, int l)
 {
+#if !DOOM_TINY
     int             i;
+#endif
 	
     V_DrawPatchDirect(x - 8, y + 7,
                       VPATCH_HANDLE(VPATCH_NAME(M_LSLEFT)));
@@ -825,7 +828,6 @@ void M_DrawSaveLoadBorder(int x,int y, int l)
     V_DrawPatchDirect(x, y + 7, 
                       VPATCH_HANDLE(VPATCH_NAME(M_LSRGHT)));
 }
-#endif
 
 #endif
 
@@ -875,7 +877,7 @@ void M_LoadGame (int choice)
 void M_DrawSave(void)
 {
 #if BADGER_DOOM
-    M_DrawBadgerSlots("SAVE GAME", stringEntry ? saveSlot : -1);
+    M_DrawBadgerSlots(VPATCH_HANDLE(VPATCH_NAME(M_SAVEG)), stringEntry ? saveSlot : -1);
 #else
     int             i;
 	
