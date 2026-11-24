@@ -132,7 +132,9 @@ enum { BADGER_MENU_FOOTER_Y = SCREENHEIGHT - 16 };
 enum { BADGER_MAP_BLACK = 0, BADGER_MAP_WHITE = 4 };
 // The UI patches are the final entries in the completed overlay list.
 void I_SetBadgerOverlay(unsigned first_patch, const void *menu_page, uint8_t help_page,
-                        boolean pause, boolean help_transition, boolean native_rows);
+                        boolean pause, boolean art_pending, boolean native_rows);
+// Claim one navigation action after the currently rendered menu settles.
+boolean I_BadgerTakeMenuInput(void);
 #endif
 #if !DEMO1_ONLY
 extern uint8_t *next_video_scroll;

@@ -3067,8 +3067,11 @@ void pd_end_frame(int wipe_start) {
     M_Drawer();
 #if BADGER_DOOM
     const void *menu_page = menuactive && !inhelpscreens ? M_BadgerMenuPage() : nullptr;
+    // Splash and help artwork are decoded across two renderer passes.
+    // Don't commit the first half to a panel that will hold it for seconds.
+    const bool art_pending = sub_gamestate == 1 && (gamestate == GS_DEMOSCREEN || help_page);
     I_SetBadgerOverlay(first_ui_patch, menu_page, help_page, pause_overlay,
-                       help_page != (inhelpscreens & 127), native_rows);
+                       art_pending || help_page != (inhelpscreens & 127), native_rows);
 #endif
 
 #if !BADGER_DOOM

@@ -213,6 +213,10 @@ const void *M_BadgerMenuPage(void)
 static void M_NewGame(int choice);
 static void M_Episode(int choice);
 static void M_ChooseSkill(int choice);
+#if BADGER_DOOM
+static void M_StartBadgerGame(int choice);
+static void M_DrawBadgerControls(void);
+#endif
 #if !NO_USE_LOAD
 static void M_LoadGame(int choice);
 #endif
@@ -391,6 +395,23 @@ menu_t  NewDef =
     48,63,              // x,y
     hurtme		// lastOn
 };
+
+#if BADGER_DOOM
+static const menuitem_t BadgerControlsMenu[] =
+{
+    {1, VPATCH_NAME_INVALID, '\0', M_StartBadgerGame},
+};
+
+static menu_t BadgerControlsDef =
+{
+    1,
+    &NewDef,
+    BadgerControlsMenu,
+    M_DrawBadgerControls,
+    0, 0,
+    0
+};
+#endif
 
 
 
@@ -655,6 +676,8 @@ boolean M_BadgerMenuNativeRows(void)
 {
     if (!menuactive || messageToPrint)
         return false;
+    if (currentMenu == &BadgerControlsDef)
+        return true;
 #if !NO_USE_LOAD
     if (currentMenu == &LoadDef)
         return true;
@@ -1259,12 +1282,29 @@ boolean M_FinishGameSelection() {
     return false;
 }
 
+#if BADGER_DOOM
+static void M_StartBadgerGame(int choice)
+{
+    M_FinishGameSelection();
+}
+#endif
+
+static boolean M_ConfirmGameSelection(void)
+{
+#if BADGER_DOOM
+    M_SetupNextMenu(&BadgerControlsDef);
+    return true;
+#else
+    return M_FinishGameSelection();
+#endif
+}
+
 boolean M_VerifyNightmare(int key)
 {
     if (key != key_menu_confirm)
 	return false;
     skill = nightmare;
-    return M_FinishGameSelection();
+    return M_ConfirmGameSelection();
 }
 
 void M_ChooseSkill(int choice)
@@ -1276,7 +1316,7 @@ void M_ChooseSkill(int choice)
     }
 
     skill = choice;
-    M_FinishGameSelection();
+    M_ConfirmGameSelection();
 }
 
 void M_Episode(int choice)
@@ -2321,6 +2361,14 @@ boolean M_Responder (event_t* ev)
 	return false;
     }
 
+#if BADGER_DOOM
+    // The controls card has only a start action, with no cursor to move.
+    if (currentMenu == &BadgerControlsDef
+        && key != key_menu_forward && key != key_menu_back
+        && key != key_menu_activate)
+        return true;
+#endif
+
     // Keys usable within menu
 
     if (key == key_menu_down)
@@ -2509,6 +2557,19 @@ static void M_DrawBadgerFooter(const char *hint)
 }
 #endif
 
+#if BADGER_DOOM
+static void M_DrawBadgerControls(void)
+{
+    const char *title = "DOOM CONTROLS";
+    M_WriteText((SCREENWIDTH - M_StringWidth(title)) / 2, 70, title);
+    M_WriteText(60, 84, "UP / DOWN\nA / C\nB\nUP+DOWN");
+    M_WriteText(160, 84, "MOVE\nTURN\nFIRE\nUSE / OPEN");
+    M_WriteText(60, 134, "HOLD A+C, THEN");
+    M_WriteText(74, 146, "B: CYCLE WEAPONS (FISTS TOO)\nUP: MAP   DOWN: PAUSE");
+    M_WriteText(60, 172, "RELEASE A+C ALONE: MENU");
+}
+#endif
+
 //
 // M_Drawer
 // Called after the view has been rendered,
@@ -2598,8 +2659,11 @@ void M_Drawer (void)
 #if BADGER_DOOM
     if (M_BadgerMenuNativeRows())
     {
-        M_DrawBadgerFooter(stringEntry ? "B: ACCEPT   UP+DOWN: CANCEL"
-                                       : "B: SELECT   UP+DOWN: BACK");
+        if (currentMenu == &BadgerControlsDef)
+            M_DrawBadgerFooter("B: START   UP+DOWN: BACK");
+        else
+            M_DrawBadgerFooter(stringEntry ? "B: ACCEPT   UP+DOWN: CANCEL"
+                                           : "B: SELECT   UP+DOWN: BACK");
         return;
     }
 #endif

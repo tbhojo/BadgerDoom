@@ -26,11 +26,6 @@ bool badger_display_ready(void);
 // requesting a whole-frame clean.
 void badger_display_submit(const uint8_t *frame, enum badger_update_mode mode);
 
-// Call only when ready. previous is the last submitted frame in the same
-// format. Scrub the changed rectangle and a three-pixel margin; a no-op
-// when the two frames are identical.
-void badger_display_submit_ui(const uint8_t *frame, const uint8_t *previous);
-
 // Call only when ready and rows [0, first_row) match the last displayed frame.
 // Balanced TURBO drives rows [first_row, BADGER_HEIGHT) only. This still
 // occupies the panel for one full-window refresh.

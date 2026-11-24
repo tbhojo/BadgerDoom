@@ -22,14 +22,16 @@ The `github_universe_badger` board builds `doom_tiny` for the **RP2350A** badge
 with the **296×128 monochrome E-Ink panel**. It keeps Doom's game timing and
 renders the entire view, status bar, and menus to the UC8151 panel. Normal
 movement uses a [differential waveform](https://github.com/antirez/uc8151_micropython)
-at the badge-compatible 100 Hz clock. Menu, help, and pause transitions
-use Pimoroni's stronger FAST waveform at the same clock (about 1.9 seconds
-per repaint). A selector move refreshes the old and new positions plus a
-three-pixel margin, not the rest of the menu. A new or loaded level is repainted
-after the engine's wipe. A shorter charge-balanced recovery runs after 24
-changing gameplay frames when the view is steady and buttons are released for
-half a second, or after 48 changing frames if play continues. The shorter
-HUD-only scrub still runs after eight HUD changes on a steady playfield.
+at the badge-compatible 100 Hz clock. The complete boot title, menu page
+changes, and pause transitions use Pimoroni's stronger FAST waveform
+(about 1.9 seconds). Cursor steps use the shorter differential waveform
+(about 0.38 seconds); quick taps and confirmations are queued in order.
+After 1.2 seconds of menu inactivity, one balanced refresh reduces residual marks.
+A new or loaded level is repainted after the engine's wipe. In gameplay,
+the balanced recovery runs after 12 changing playfield frames when the
+view and buttons are steady for half a second, or after 24 changing frames
+if play continues. The HUD still has its own faster recovery after eight
+HUD changes on a steady playfield.
 The long factory refresh is still boot-only. The port is single-player
 and silent; USB is for diagnostics and reflashing, not keyboard input.
 
@@ -98,10 +100,13 @@ and replaces Doom and its saves.
 | Context | Buttons |
 | --- | --- |
 | Play | **Up/Down** move, **A/C** turn, **B** fires, **Up+Down** uses or opens |
-| Shortcuts | Hold **A+C**, then tap **B** for next weapon, **Up** for automap, or **Down** to pause |
+| Shortcuts | Hold **A+C**, then tap **B** to cycle owned weapons (including fists), **Up** for automap, or **Down** to pause. Release **A+C** between shortcuts |
 | Menu | Press and release **A+C** to open or close; **Up/Down** select, **A/C** adjust, **B** confirms. Submenu footers show **Up+Down** for Back |
 | Prompts and saves | **B** confirms; either chord cancels. New saves default to the current map name |
 | Automap | **A+C**, then **B** toggles follow; with follow off, **Up/Down/A/C** pan. **B** zooms in, **Up+Down** zooms out |
+
+New Game shows a controls card after difficulty selection. **B** starts
+the level; **Up+Down** returns to difficulty. Load Game opens the save directly.
 
 Use short taps for precise turns: input and game logic run between panel
 updates, so the screen can lag a held button.

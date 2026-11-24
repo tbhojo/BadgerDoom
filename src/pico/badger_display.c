@@ -44,7 +44,6 @@ enum {
     FRAME_STRIDE = BADGER_WIDTH / 8,
     PANEL_COLUMN_BYTES = BADGER_HEIGHT / 8,
     PANEL_BLOCK_BYTES = 8 * PANEL_COLUMN_BYTES,
-    UI_SCRUB_PAD = 3,
     POWER_TIMEOUT_MS = 1000,
     BOOT_REFRESH_TIMEOUT_MS = 10000,
     SHORT_REFRESH_TIMEOUT_MS = 2000,
@@ -74,7 +73,6 @@ static absolute_time_t refresh_deadline;
 static enum waveform {
     WAVEFORM_DIFF,
     WAVEFORM_MAINTENANCE,
-    WAVEFORM_FAST_CHANGED,
     WAVEFORM_FAST_FULL,
     WAVEFORM_TURBO_HUD,
 } active_waveform;
@@ -216,13 +214,12 @@ static uint64_t transpose_tile(const uint8_t *src)
     return tile ^ swap ^ (swap << 28);
 }
 
-// Bounds are half-open in 8x8 tiles.
-static void pack_frame(const uint8_t *frame, unsigned x_begin, unsigned y_begin,
-                       unsigned x_end, unsigned y_end)
+// Pack the entire width, starting at the first affected eight-row tile.
+static void pack_frame(const uint8_t *frame, unsigned first_row_byte)
 {
-    for (unsigned x = x_begin; x < x_end; ++x) {
+    for (unsigned x = 0; x < FRAME_STRIDE; ++x) {
         uint8_t *block = panel_frame + x * PANEL_BLOCK_BYTES;
-        for (unsigned y = y_begin; y < y_end; ++y) {
+        for (unsigned y = first_row_byte; y < PANEL_COLUMN_BYTES; ++y) {
             uint64_t tile = transpose_tile(frame + y * 8 * FRAME_STRIDE + x);
             // Each packed output byte holds eight vertical pixels, MSB first.
             for (unsigned col = 8; col-- > 0;) {
@@ -233,27 +230,17 @@ static void pack_frame(const uint8_t *frame, unsigned x_begin, unsigned y_begin,
     }
 }
 
-// Flip the half-open landscape rectangle in the packed portrait plane.
-static void invert_rect(unsigned left, unsigned top, unsigned right, unsigned bottom)
+// In portrait storage, the top of the HUD can split a byte in each column.
+static void invert_hud(unsigned first_row)
 {
-    const unsigned first_byte = top / 8;
-    const unsigned last_byte = (bottom - 1) / 8;
-    const uint8_t first_mask = 0xffu >> (top % 8);
-    const uint8_t last_mask = (uint8_t)(0xffu << (7 - (bottom - 1) % 8));
-    if (first_byte == last_byte) {
-        const uint8_t mask = first_mask & last_mask;
-        for (unsigned x = left; x < right; ++x) {
-            panel_frame[x * PANEL_COLUMN_BYTES + first_byte] ^= mask;
-        }
-        return;
-    }
-    for (unsigned x = left; x < right; ++x) {
+    const unsigned first_byte = first_row / 8;
+    const uint8_t mask = 0xffu >> (first_row % 8);
+    for (unsigned x = 0; x < BADGER_WIDTH; ++x) {
         uint8_t *column = panel_frame + x * PANEL_COLUMN_BYTES;
-        column[first_byte] ^= first_mask;
-        for (unsigned y = first_byte + 1; y < last_byte; ++y) {
+        column[first_byte] ^= mask;
+        for (unsigned y = first_byte + 1; y < PANEL_COLUMN_BYTES; ++y) {
             column[y] ^= 0xff;
         }
-        column[last_byte] ^= last_mask;
     }
 }
 
@@ -342,7 +329,7 @@ bool badger_display_init(void)
     // submit never waits for a power-on cycle.
     command(PSR, (const uint8_t[]){PANEL_SETTINGS | LUT_FROM_REGISTERS}, 1);
     command(CDI, (const uint8_t[]){CDI_DIFFERENTIAL}, 1);
-    load_waveform(WAVEFORM_DIFF);
+    load_waveform(WAVEFORM_FAST_FULL);
     display_state = READY;
     return true;
 }
@@ -366,59 +353,9 @@ void badger_display_submit(const uint8_t *frame, enum badger_update_mode mode)
     select_waveform(mode == BADGER_UPDATE_DIFF ? WAVEFORM_DIFF :
                     mode == BADGER_UPDATE_MAINTENANCE ? WAVEFORM_MAINTENANCE : WAVEFORM_FAST_FULL);
     write_panel_plane(DTM1);
-    pack_frame(frame, 0, 0, FRAME_STRIDE, PANEL_COLUMN_BYTES);
+    pack_frame(frame, 0);
     write_panel_plane(DTM2);
     start_refresh(mode == BADGER_UPDATE_CLEAN ? FAST_REFRESH_TIMEOUT_MS : SHORT_REFRESH_TIMEOUT_MS);
-}
-
-void badger_display_submit_ui(const uint8_t *frame, const uint8_t *previous)
-{
-    if (display_state != READY) {
-        return;
-    }
-    unsigned left = BADGER_WIDTH, top = BADGER_HEIGHT;
-    unsigned right = 0, bottom = 0;
-    for (unsigned y = 0; y < BADGER_HEIGHT; ++y) {
-        for (unsigned byte = 0; byte < FRAME_STRIDE; ++byte) {
-            const unsigned offset = y * FRAME_STRIDE + byte;
-            const unsigned diff = frame[offset] ^ previous[offset];
-            if (!diff) continue;
-            if (y < top) top = y;
-            bottom = y + 1;
-
-            // Bit 7 is leftmost. Only examine bits in bytes that can
-            // extend an edge beyond the current bounds.
-            const unsigned x = byte * 8;
-            if (x < left) {
-                const unsigned first = x + __builtin_clz(diff << 24);
-                if (first < left) left = first;
-            }
-            if (x + 8 > right) {
-                const unsigned after = x + 8 - __builtin_ctz(diff);
-                if (after > right) right = after;
-            }
-        }
-    }
-    if (bottom == 0) {
-        return;
-    }
-
-    select_waveform(WAVEFORM_FAST_CHANGED);
-    // Only the tiles intersecting the difference need repacking. All
-    // other cached pixels (including in the margin) already match NEW.
-    pack_frame(frame, left / 8, top / 8, (right + 7) / 8, (bottom + 7) / 8);
-    left = left > UI_SCRUB_PAD ? left - UI_SCRUB_PAD : 0;
-    top = top > UI_SCRUB_PAD ? top - UI_SCRUB_PAD : 0;
-    right = right < BADGER_WIDTH - UI_SCRUB_PAD ? right + UI_SCRUB_PAD : BADGER_WIDTH;
-    bottom = bottom < BADGER_HEIGHT - UI_SCRUB_PAD ? bottom + UI_SCRUB_PAD : BADGER_HEIGHT;
-
-    // Present the opposite OLD color only inside the padded rectangle so
-    // FAST drives its background too. Outside it, the WW/BB LUTs are zero.
-    invert_rect(left, top, right, bottom);
-    write_panel_plane(DTM1);
-    invert_rect(left, top, right, bottom);
-    write_panel_plane(DTM2);
-    start_refresh(FAST_REFRESH_TIMEOUT_MS);
 }
 
 void badger_display_clean_hud(const uint8_t *frame, unsigned first_row)
@@ -430,10 +367,10 @@ void badger_display_clean_hud(const uint8_t *frame, unsigned first_row)
     const unsigned first_byte = first_row / 8;
     // The boundary tile may also contain world rows; those match the
     // cached frame. Make only the HUD look changed in the OLD plane.
-    pack_frame(frame, 0, first_byte, FRAME_STRIDE, PANEL_COLUMN_BYTES);
-    invert_rect(0, first_row, BADGER_WIDTH, BADGER_HEIGHT);
+    pack_frame(frame, first_byte);
+    invert_hud(first_row);
     write_panel_plane(DTM1);
-    invert_rect(0, first_row, BADGER_WIDTH, BADGER_HEIGHT);
+    invert_hud(first_row);
     write_panel_plane(DTM2);
     start_refresh(SHORT_REFRESH_TIMEOUT_MS);
 }

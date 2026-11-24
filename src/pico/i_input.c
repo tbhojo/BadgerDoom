@@ -36,6 +36,7 @@
 #if BADGER_DOOM
 #include "badger_input.h"
 #include "doom/doomstat.h"
+#include "doom/m_menu.h"
 #include "m_controls.h"
 #include "pico/time.h"
 #elif USB_SUPPORT
@@ -557,6 +558,7 @@ enum {
     BADGER_LR_CHORD = BADGER_BUTTON_A | BADGER_BUTTON_C,
     BADGER_UD_CHORD = BADGER_BUTTON_UP | BADGER_BUTTON_DOWN,
     BADGER_CHORD_GRACE_US = 30000,
+    BADGER_MENU_KEYS = 4,
 };
 
 static void BadgerPostKey(int key, bool down)
@@ -642,6 +644,9 @@ static void BadgerPollDoom(void)
 {
     static badger_mode_t previous_mode;
     static gamestate_t previous_gamestate;
+    static const void *previous_page;
+    static int menu_keys[BADGER_MENU_KEYS];
+    static unsigned menu_head, menu_count;
     static badger_buttons_t blocked, previous_buttons, previous_single;
     static badger_chord_t lr, ud;
     static bool command_used;
@@ -651,8 +656,13 @@ static void BadgerPollDoom(void)
 
     const badger_buttons_t physical = badger_buttons_poll();
     const badger_mode_t mode = BadgerMode();
+    const void *page = mode == BADGER_MENU ? M_BadgerMenuPage() : NULL;
+    const bool mode_changed = mode != previous_mode || gamestate != previous_gamestate;
+    if (mode_changed || page != previous_page)
+        menu_count = 0;
+    previous_page = page;
     blocked &= physical;
-    if (mode != previous_mode || gamestate != previous_gamestate) {
+    if (mode_changed) {
         BadgerHoldKeys(0, 0, 0);
         blocked = physical;
         previous_buttons = previous_single = 0;
@@ -711,8 +721,10 @@ static void BadgerPollDoom(void)
                 command_used = command != 0;
             }
             if (!lr.latched) {
-                if (!command_used)
+                if (!command_used) {
+                    (void)I_BadgerTakeMenuInput();
                     BadgerTapKey(key_menu_activate);
+                }
                 blocked |= physical;
                 ud = (badger_chord_t) {0};
             }
@@ -730,20 +742,35 @@ static void BadgerPollDoom(void)
         return;
     }
 
-    // One menu action per poll, so an input sampled for one menu cannot also
-    // select something in the next menu before its input mode is observed.
+    // Back/Close cancels queued navigation and need not wait for the panel.
     if (lr_started || ud_started) {
+        menu_count = 0;
+        (void)I_BadgerTakeMenuInput();
         BadgerTapKey(mode == BADGER_NAME ? KEY_ESCAPE
                    : mode == BADGER_PROMPT ? key_menu_abort
                    : lr_started ? key_menu_activate : key_menu_back);
-    } else if (tapped & BADGER_BUTTON_B) {
-        BadgerTapKey(mode == BADGER_NAME ? KEY_ENTER
-                   : mode == BADGER_PROMPT ? key_menu_confirm : key_menu_forward);
-    } else if (mode == BADGER_MENU) {
-        BadgerTapKey(tapped & BADGER_BUTTON_UP ? key_menu_up
-                   : tapped & BADGER_BUTTON_DOWN ? key_menu_down
-                   : tapped & BADGER_BUTTON_A ? key_menu_left
-                   : tapped & BADGER_BUTTON_C ? key_menu_right : 0);
+        return;
+    }
+
+    // Keep taps in order through panel BUSY. A confirm follows, rather than
+    // overtakes, any earlier cursor steps. Back and page changes discard them.
+    const badger_buttons_t step = mode == BADGER_MENU ? tapped & BADGER_UD_CHORD : 0;
+    const int key = step & BADGER_BUTTON_UP ? key_menu_up
+                  : step & BADGER_BUTTON_DOWN ? key_menu_down
+                  : mode == BADGER_MENU && ud.pending && !ud.sent ? 0
+                  : tapped & BADGER_BUTTON_B
+                    ? (mode == BADGER_NAME ? KEY_ENTER
+                       : mode == BADGER_PROMPT ? key_menu_confirm : key_menu_forward)
+                  : mode == BADGER_MENU && (tapped & BADGER_BUTTON_A) ? key_menu_left
+                  : mode == BADGER_MENU && (tapped & BADGER_BUTTON_C) ? key_menu_right : 0;
+    if (key && menu_count < BADGER_MENU_KEYS) {
+        menu_keys[(menu_head + menu_count) % BADGER_MENU_KEYS] = key;
+        ++menu_count;
+    }
+    if (menu_count && I_BadgerTakeMenuInput()) {
+        BadgerTapKey(menu_keys[menu_head]);
+        menu_head = (menu_head + 1) % BADGER_MENU_KEYS;
+        --menu_count;
     }
 }
 #endif

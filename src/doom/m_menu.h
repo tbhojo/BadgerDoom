@@ -61,7 +61,7 @@ void M_ClearMenus (void);
 #if BADGER_DOOM
 // Opaque identity of the visible menu or dialog, not its current selection.
 const void *M_BadgerMenuPage(void);
-// Save/load lists use native-height text instead of the scaled menu canvas.
+// Save/load lists and the controls card use native-height text.
 boolean M_BadgerMenuNativeRows(void);
 #endif
 

@@ -62,16 +62,16 @@ static unsigned ui_first_patch;
 static const void *ui_menu;
 static uint8_t ui_help;
 static bool ui_pause;
-static bool ui_help_transition;
+static bool ui_art_pending;
 static bool ui_native_rows;
 
 void I_SetBadgerOverlay(unsigned first_patch, const void *menu_page, uint8_t help_page,
-                        boolean pause, boolean help_transition, boolean native_rows) {
+                        boolean pause, boolean art_pending, boolean native_rows) {
     ui_first_patch = first_patch;
     ui_menu = menu_page;
     ui_help = help_page;
     ui_pause = pause;
-    ui_help_transition = help_transition;
+    ui_art_pending = art_pending;
     ui_native_rows = native_rows;
 }
 
@@ -1326,17 +1326,42 @@ static void badger_pack_tone_row(uint8_t *out, int y, const uint16_t *row,
         {254, 126, 222,  94, 246, 118, 214,  86},
     };
     const uint8_t *threshold = bayer[y & 7];
-    for (int x = 0; x < BADGER_WIDTH;) {
-        uint8_t bits = 0;
-        for (int bit = 0; bit < 8; ++bit, ++x) {
-            int tone = row[x];
-            if (above && !(tone & UI_WHITE)) {
-                tone = badger_scene_edge(tone, row[x - 1], row[x + 1], above[x], below[x]);
+    if (!above) {
+        for (int x = 0; x < BADGER_WIDTH;) {
+            unsigned bits = 0;
+            for (int bit = 0; bit < 8; ++bit, ++x) {
+                bits = (bits << 1) | (row[x] >= threshold[bit]);
             }
-            bits = (bits << 1) | (tone >= threshold[bit]);
+            *out++ = bits;
+        }
+        return;
+    }
+
+    // Reuse adjacent samples across pixels, including at packed-byte boundaries.
+    int left = row[-1];
+    int tone = row[0];
+    for (int x = 0; x < BADGER_WIDTH;) {
+        unsigned bits = 0;
+        for (int bit = 0; bit < 8; ++bit, ++x) {
+            const int right = row[x + 1];
+            int sharpened = tone;
+            if (!(tone & UI_WHITE)) {
+                sharpened = badger_scene_edge(tone, left, right, above[x], below[x]);
+            }
+            bits = (bits << 1) | (sharpened >= threshold[bit]);
+            left = tone;
+            tone = right;
         }
         *out++ = bits;
     }
+}
+
+static bool menu_input_ready;
+
+boolean I_BadgerTakeMenuInput(void) {
+    const bool ready = menu_input_ready;
+    menu_input_ready = false;
+    return ready;
 }
 
 void I_FinishUpdate(void) {
@@ -1353,17 +1378,21 @@ void I_FinishUpdate(void) {
     static bool level_clean_pending;
     static unsigned gameplay_updates;
     static uint64_t idle_since;
+    static bool menu_recovery_pending;
+    static uint32_t menu_idle_since;
 
     enum {
         HUD_CLEAN_CHANGES = 8,
-        GAMEPLAY_IDLE_UPDATES = 24,
-        GAMEPLAY_FORCE_UPDATES = 48,
+        GAMEPLAY_IDLE_UPDATES = 12,
+        GAMEPLAY_FORCE_UPDATES = 24,
         GAMEPLAY_IDLE_US = 500000,
+        MENU_IDLE_US = 1200000,
         PLAYFIELD_BYTES = BADGER_HUD_TOP * BADGER_HUD_PITCH,
     };
 
     // Sampling is on core 0 between game frames. Core 1 only draws geometry;
     // the panel refreshes on its own while both cores render the next frame.
+    menu_input_ready = false;
     const bool finishing_wipe = display_video_type == VIDEO_TYPE_WIPE;
     const bool fresh_frame = sem_available(&render_frame_ready);
     new_frame_stuff();
@@ -1373,9 +1402,9 @@ void I_FinishUpdate(void) {
     }
     // Keep the last physical image through the outgoing frame and the melt.
     // Its last pass switches video type before a normal view has been drawn.
-    // Also wait for help art and its overlay to agree before presenting it.
+    // Also wait for complete title/help art and matching overlay metadata.
     if (!fresh_frame || pre_wipe_state || finishing_wipe || display_video_type == VIDEO_TYPE_WIPE ||
-        display_video_type < FIRST_VIDEO_TYPE_WITH_OVERLAYS || ui_help_transition) {
+        display_video_type < FIRST_VIDEO_TYPE_WITH_OVERLAYS || ui_art_pending) {
         idle_since = 0;
         return;
     }
@@ -1385,7 +1414,7 @@ void I_FinishUpdate(void) {
     const bool has_hud = display_video_type == VIDEO_TYPE_DOUBLE && gamestate == GS_LEVEL && !has_footer;
     const bool world = has_hud && !automapactive;
     const bool gameplay = world && !ui_pause && usergame;
-    const bool boundary_clean = (level_clean_pending && has_hud) ||
+    const bool boundary_clean = !submitted || (level_clean_pending && has_hud) ||
                                 ui_menu != presented_menu || ui_help != presented_help ||
                                 ui_pause != presented_pause;
     // Prefer a quiet scene, but cap the number of world updates even while moving.
@@ -1452,9 +1481,9 @@ void I_FinishUpdate(void) {
     if (has_hud) badger_draw_hud(out);
 
     const bool maintenance = force_maintenance || idle_maintenance;
-    bool changed = !submitted;
+    bool changed = false;
     bool clean_hud = false;
-    if (!boundary_clean && !maintenance && submitted) {
+    if (!boundary_clean && !maintenance) {
         if (has_hud && presented_hud && !ui_pause) {
             const bool hud_changed = memcmp(frame + PLAYFIELD_BYTES, previous + PLAYFIELD_BYTES,
                                             BADGER_FRAME_BYTES - PLAYFIELD_BYTES) != 0;
@@ -1471,27 +1500,36 @@ void I_FinishUpdate(void) {
             changed = memcmp(frame, previous, BADGER_FRAME_BYTES) != 0;
         }
     }
-    if (boundary_clean || maintenance) {
+    // Show each cursor step with the fast waveform. Rebalance the screen
+    // only after navigation has settled, never as part of a cursor move.
+    bool menu_recovery = false;
+    if (has_footer && menu_recovery_pending && !boundary_clean && !changed &&
+        !badger_buttons_raw()) {
+        const uint32_t now = time_us_32();
+        if (!menu_idle_since) menu_idle_since = now;
+        menu_recovery = now - menu_idle_since >= MENU_IDLE_US;
+    } else {
+        menu_idle_since = 0;
+    }
+
+    if (boundary_clean || maintenance || menu_recovery) {
         badger_display_submit(frame, boundary_clean ? BADGER_UPDATE_CLEAN : BADGER_UPDATE_MAINTENANCE);
         hud_changes = 0;
         level_clean_pending = false;
         gameplay_updates = 0;
         idle_since = 0;
+        menu_recovery_pending = false;
+        menu_idle_since = 0;
     } else if (clean_hud) {
         badger_display_clean_hud(frame, BADGER_HUD_TOP);
         hud_changes = 0;
     } else if (changed) {
-        if (has_footer || ui_pause) {
-            badger_display_submit_ui(frame, previous);
-            hud_changes = 0;
-            gameplay_updates = 0;
-            idle_since = 0;
-        } else {
-            badger_display_submit(frame, BADGER_UPDATE_DIFF);
-            // Pure HUD traffic does not age the differential playfield.
-            if (gameplay && playfield_changed) ++gameplay_updates;
-        }
+        badger_display_submit(frame, BADGER_UPDATE_DIFF);
+        if (has_footer) menu_recovery_pending = true;
+        // Pure HUD traffic does not age the differential playfield.
+        if (gameplay && playfield_changed) ++gameplay_updates;
     } else {
+        menu_input_ready = has_footer;
         return;
     }
 
