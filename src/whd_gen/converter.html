@@ -5,7 +5,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' 'wasm-unsafe-eval'; style-src 'unsafe-inline'; worker-src blob:; form-action 'none'; base-uri 'none'">
-<title>Badger Doom — Game Data Converter</title>
+<title>Badger Doom — Offline Installer</title>
 <style>
   :root { color-scheme: light dark; font: 1rem/1.5 system-ui, sans-serif; }
   main { max-width: 36rem; margin: 3rem auto; padding: 0 1.25rem; }
@@ -20,17 +20,17 @@
 </head>
 <body>
 <main>
-  <h1>Badger Doom Game Data Converter</h1>
-  <p>Turn your Doom v1.9 shareware <code>DOOM1.WAD</code> into <code>doom1.whx</code> for the GitHub Universe 2024 Badger.</p>
-  <p>This page works offline. Your WAD stays in this browser, and no game data is included.</p>
+  <h1>Badger Doom Offline Installer</h1>
+  <p>Choose your Doom v1.9 shareware <code>DOOM1.WAD</code> to make one UF2 for the <strong>GitHub Universe 2024 Badger</strong>. No game data is included or uploaded.</p>
+  <p><strong>Back up first</strong> if you need to restore the badge's current firmware or files. Flashing the installer replaces the current firmware.</p>
   <form id="converter">
     <label for="wad">Doom v1.9 shareware WAD</label>
     <input id="wad" type="file" accept=".wad" required>
-    <button type="submit">Convert</button>
+    <button type="submit">Create installer</button>
   </form>
   <p id="status" role="status"></p>
-  <a id="download" download="doom1.whx" hidden>Download doom1.whx</a>
-  <noscript>Enable JavaScript and WebAssembly to use this offline converter.</noscript>
+  <a id="download" download="badger-doom-install.uf2" hidden>Download badger-doom-install.uf2</a>
+  <noscript>Enable JavaScript and WebAssembly to use this offline installer.</noscript>
   <details>
     <summary>License notices</summary>
     <pre>@converter_licenses@</pre>
@@ -40,6 +40,7 @@
 @converter_program@
 </script>
 <script id="worker" type="text/plain">
+@converter_installer@
 self.onmessage = async ({ data: wad }) => {
   let diagnostic = '';
   const remember = line => { if (line.trim()) diagnostic = line.trim(); };
@@ -49,10 +50,11 @@ self.onmessage = async ({ data: wad }) => {
     const result = converter.callMain(['/doom1.wad', '/doom1.whx']);
     if (result) throw new Error(diagnostic || 'The converter rejected the WAD.');
     const whx = converter.FS.readFile('/doom1.whx');
-    if (whx.length < 36 || new DataView(whx.buffer, whx.byteOffset).getUint32(0) !== 0x49574858) {
-      throw new Error('The converter did not produce a valid WHX.');
-    }
-    self.postMessage({ whx }, [whx.buffer]);
+    const bytes = atob('@converter_firmware@');
+    const firmware = new Uint8Array(bytes.length);
+    for (let i = 0; i < firmware.length; i++) firmware[i] = bytes.charCodeAt(i);
+    const installer = makeInstallUf2(firmware, whx);
+    self.postMessage({ installer }, [installer.buffer]);
   } catch (error) {
     self.postMessage({ error: error.message || 'The converter could not run.' });
   }
@@ -79,7 +81,7 @@ form.addEventListener('submit', async event => {
   const file = fileInput.files[0];
   if (!file) return;
   button.disabled = fileInput.disabled = true;
-  status.textContent = 'Converting…';
+  status.textContent = 'Creating installer…';
   let worker;
   let workerUrl;
   try {
@@ -93,14 +95,14 @@ form.addEventListener('submit', async event => {
       document.querySelector('#worker').textContent,
     ], { type: 'text/javascript' }));
     worker = new Worker(workerUrl);
-    const whx = await new Promise((resolve, reject) => {
-      worker.onmessage = ({ data }) => data.error ? reject(new Error(data.error)) : resolve(data.whx);
-      worker.onerror = () => reject(new Error('Could not run the offline converter. Try a current browser.'));
+    const installer = await new Promise((resolve, reject) => {
+      worker.onmessage = ({ data }) => data.error ? reject(new Error(data.error)) : resolve(data.installer);
+      worker.onerror = () => reject(new Error('Could not run the offline installer. Try a current browser.'));
       worker.postMessage(wad, [wad]);
     });
-    download.href = URL.createObjectURL(new Blob([whx], { type: 'application/octet-stream' }));
+    download.href = URL.createObjectURL(new Blob([installer], { type: 'application/octet-stream' }));
     download.hidden = false;
-    status.textContent = 'Conversion complete.';
+    status.textContent = 'Ready. Hold BOOTSEL while reconnecting the badge, then copy the UF2 onto the RP2350 drive.';
   } catch (error) {
     status.textContent = error.message;
   } finally {

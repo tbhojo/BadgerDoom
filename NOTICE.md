@@ -8,7 +8,7 @@ The Badger Doom contributors modified the port in November 2026 to add the GitHu
 
 When distributing a prebuilt firmware UF2, make corresponding source for that exact build available alongside it, with the build instructions and dependency revisions. Distribute the firmware separately from game data and never include a full-flash device backup.
 
-The offline browser converter compiles the same `whd_gen` source with [Emscripten 4.0.12](https://github.com/emscripten-core/emscripten/tree/4.0.12). Runtime and component licenses are embedded in the downloadable HTML. Use the tagged repository and the source-build instructions in [README.md](README.md#prepare-the-game-data) to rebuild that download.
+The offline browser installer compiles the same `whd_gen` source with [Emscripten 4.0.12](https://github.com/emscripten-core/emscripten/tree/4.0.12) and embeds the firmware-only UF2. Its release notes identify the exact firmware build. Runtime and component licenses are embedded in the HTML. Use the tagged repository and [source-build instructions](README.md#offline-installer-and-native-converter) to rebuild that download. A UF2 generated from a user's WAD contains game data and is not part of the release.
 
 ## UC8151 driver and badge pinout
 
