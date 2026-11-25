@@ -4,13 +4,15 @@ Play the original Doom shareware episode on the **GitHub Universe 2024 Badger**.
 
 **Hardware:** This build targets the GitHub Universe badge with an **RP2350A**, **4 MiB flash**, and a **UC8151** panel. It is not a build for the Badger 2040, the retail Badger 2350, or a bare Raspberry Pi Pico. The Badger version is single-player and silent. Expect visible refresh lag and occasional flashing on E-Ink.
 
-[Build](#build) · [First install](#first-install) · [Controls](#controls) · [Troubleshooting](#troubleshooting) · [Credits](#credits-and-license)
+[Firmware](#get-the-firmware) · [Game data](#prepare-the-game-data) · [First install](#first-install) · [Controls](#controls) · [Troubleshooting](#troubleshooting) · [Credits](#credits-and-license)
 
-## Build
+## Get the firmware
 
-Use a USB **data** cable, Git, CMake, Ninja, a native C/C++ compiler, and [Arm GNU Toolchain](https://developer.arm.com/downloads/-/arm-gnu-toolchain) (`arm-none-eabi-gcc` and `arm-none-eabi-g++` on `PATH`). Install [picotool 2.1.1](https://github.com/raspberrypi/picotool/tree/2.1.1) or newer for flashing. The tested firmware toolchain is CMake 3.26, Arm GNU 13.2.Rel1, and Pico SDK 2.1.1. No Pico Extras or SDL is needed for the Badger firmware or the converter.
+Download `doom_tiny.uf2` from the [latest GitHub release](https://github.com/tbhojo/BadgerDoom/releases/latest). You do not need to build the firmware yourself. The UF2 does not contain Doom's game data; a first install also needs the [separate game data](#prepare-the-game-data).
 
-### 1. Build the firmware
+### Build from source (optional)
+
+Use Git, CMake, Ninja, a native C/C++ compiler, and the [Arm GNU Toolchain](https://developer.arm.com/downloads/-/arm-gnu-toolchain) (`arm-none-eabi-gcc` and `arm-none-eabi-g++` on `PATH`). This build was tested with CMake 3.26, Arm GNU 13.2.Rel1, and Pico SDK 2.1.1. No Pico Extras or SDL is needed.
 
 From the repository root, install the [Pico SDK](https://github.com/raspberrypi/pico-sdk) if you do not already have it. The SDK's TinyUSB submodule is required for USB diagnostics; the older TinyUSB submodule in this repository is not needed for the Badger.
 
@@ -22,11 +24,13 @@ cmake -S . -B build-badger -G Ninja -DCMAKE_BUILD_TYPE=MinSizeRel \
 cmake --build build-badger --target doom_tiny
 ```
 
-The firmware is `build-badger/src/doom_tiny.uf2`. It does **not** contain the game data. If CMake cannot find a local picotool package it may download and build one; see [picotool's build instructions](https://github.com/raspberrypi/picotool#building) if it needs host dependencies or a local installation.
+The firmware is `build-badger/src/doom_tiny.uf2`. If CMake cannot find a local picotool package it may download and build one; see [picotool's build instructions](https://github.com/raspberrypi/picotool#building) if it needs host dependencies or a local installation.
 
-### 2. Convert your game data
+## Prepare the game data
 
 Obtain the original [Doom v1.9 shareware distribution](https://www.doomworld.com/files/file/7043-doom-v19-shareware) separately and extract `DOOM1.WAD` (you may need to run the DOS installer in DOSBox). Rename it to `doom1.wad` in your working directory. The tested file has SHA-256 `1d7d43be501e67d927e415e0b8f3e29c3bf33075e859721816f652a526cac771`. This build is for the shareware episode, not the retail Ultimate Doom or Doom II WADs.
+
+From a clone of this repository, use CMake, Ninja, and a native C/C++ compiler to build the converter. You don't need the Pico SDK, Arm toolchain, or SDL for this step.
 
 ```sh
 cmake -S . -B build-whd-gen -G Ninja -DBUILD_WHD_GEN_ONLY=ON -DCMAKE_BUILD_TYPE=Release
@@ -38,6 +42,8 @@ Keep your WAD and the converted WHX local. The source release does not distribut
 
 ## First install
 
+Use a USB **data** cable and [picotool 2.1.1](https://github.com/raspberrypi/picotool/tree/2.1.1) or newer.
+
 1. Unplug the badge. Hold **BOOTSEL** while reconnecting it by USB. Release the button when the `RP2350` drive appears. Disconnect other RP-series boards before flashing.
 2. Run `picotool info -d`. Confirm it reports an **RP2350** with **4096K** of flash; the chip and flash size alone do not distinguish badge models.
 3. Save the existing firmware and data before writing anything. **Skip the backup command if this file already contains your original backup.** Keep that snapshot private; it can contain your badge's files.
@@ -46,11 +52,11 @@ Keep your WAD and the converted WHX local. The source release does not distribut
    picotool save -a "$HOME/badger-backup.bin"
    ```
 
-4. Write and verify the data first, then the firmware. The second command reboots the badge.
+4. Write and verify the data first, then the firmware. In the second command, substitute the path to your downloaded UF2 or use `build-badger/src/doom_tiny.uf2` if you built it. The badge reboots after the firmware is written.
 
    ```sh
    picotool load -u -v -t bin build-whd-gen/doom1.whx -o 0x10040000
-   picotool load -u -v -x build-badger/src/doom_tiny.uf2
+   picotool load -u -v -x doom_tiny.uf2
    ```
 
 Wait for the initial panel clear and the Doom title. It stays on the title until you open the menu. Press and release **A+C**, then choose **New Game**. A controls card appears after difficulty selection; **B** starts and **Up+Down** takes you back.
