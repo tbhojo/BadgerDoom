@@ -21,11 +21,11 @@
 <body>
 <main>
   <h1>Badger Doom Offline Installer</h1>
-  <p>Choose your Doom v1.9 shareware <code>DOOM1.WAD</code> to make one UF2 for the <strong>GitHub Universe 2024 Badger</strong>. No game data is included or uploaded.</p>
+  <p>Choose the Doom95 shareware ZIP (<code>doom95.zip</code>) or a Doom v1.9 shareware <code>DOOM1.WAD</code> to make one UF2 for the <strong>GitHub Universe 2024 Badger</strong>. No game data is included or uploaded.</p>
   <p><strong>Back up first</strong> if you need to restore the badge's current firmware or files. Flashing the installer replaces the current firmware.</p>
   <form id="converter">
-    <label for="wad">Doom v1.9 shareware WAD</label>
-    <input id="wad" type="file" accept=".wad" required>
+    <label for="game-data">Doom shareware ZIP or WAD</label>
+    <input id="game-data" type="file" accept=".zip,.wad" required>
     <button type="submit">Create installer</button>
   </form>
   <p id="status" role="status"></p>
@@ -40,13 +40,14 @@
 @converter_program@
 </script>
 <script id="worker" type="text/plain">
-@converter_installer@
-self.onmessage = async ({ data: wad }) => {
+@converter_scripts@
+self.onmessage = async ({ data: input }) => {
   let diagnostic = '';
   const remember = line => { if (line.trim()) diagnostic = line.trim(); };
   try {
+    const wad = await readSharewareWad(input);
     const converter = await createWhdConverter({ print: remember, printErr: remember });
-    converter.FS.writeFile('/doom1.wad', new Uint8Array(wad), { canOwn: true });
+    converter.FS.writeFile('/doom1.wad', wad, { canOwn: true });
     const result = converter.callMain(['/doom1.wad', '/doom1.whx']);
     if (result) throw new Error(diagnostic || 'The converter rejected the WAD.');
     const whx = converter.FS.readFile('/doom1.whx');
@@ -62,7 +63,7 @@ self.onmessage = async ({ data: wad }) => {
 </script>
 <script>
 const form = document.querySelector('#converter');
-const fileInput = document.querySelector('#wad');
+const fileInput = document.querySelector('#game-data');
 const button = form.querySelector('button');
 const status = document.querySelector('#status');
 const download = document.querySelector('#download');
@@ -85,11 +86,8 @@ form.addEventListener('submit', async event => {
   let worker;
   let workerUrl;
   try {
-    if (file.size !== 4196020) throw new Error('Choose DOOM1.WAD from the Doom v1.9 shareware release.');
-    const wad = await file.arrayBuffer();
-    if (new DataView(wad).getUint32(0) !== 0x49574144) {
-      throw new Error('This file is not a Doom IWAD.');
-    }
+    if (file.size > 16 * 1024 * 1024) throw new Error('Choose a Doom shareware ZIP or WAD no larger than 16 MiB.');
+    const input = await file.arrayBuffer();
     workerUrl = URL.createObjectURL(new Blob([
       document.querySelector('#program').textContent, '\n',
       document.querySelector('#worker').textContent,
@@ -98,7 +96,7 @@ form.addEventListener('submit', async event => {
     const installer = await new Promise((resolve, reject) => {
       worker.onmessage = ({ data }) => data.error ? reject(new Error(data.error)) : resolve(data.installer);
       worker.onerror = () => reject(new Error('Could not run the offline installer. Try a current browser.'));
-      worker.postMessage(wad, [wad]);
+      worker.postMessage(input, [input]);
     });
     download.href = URL.createObjectURL(new Blob([installer], { type: 'application/octet-stream' }));
     download.hidden = false;

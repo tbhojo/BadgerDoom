@@ -1,7 +1,11 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 file(READ "${PROGRAM}" converter_program)
-file(READ "${INSTALLER}" converter_installer)
-if (converter_program MATCHES "</[sS][cC][rR][iI][pP][tT]" OR converter_installer MATCHES "</[sS][cC][rR][iI][pP][tT]")
+set(converter_scripts "")
+foreach (script IN LISTS SCRIPTS)
+    file(READ "${script}" source)
+    string(APPEND converter_scripts "${source}\n")
+endforeach()
+if (converter_program MATCHES "</[sS][cC][rR][iI][pP][tT]" OR converter_scripts MATCHES "</[sS][cC][rR][iI][pP][tT]")
     message(FATAL_ERROR "Converter JavaScript cannot be embedded in an HTML script element")
 endif()
 execute_process(

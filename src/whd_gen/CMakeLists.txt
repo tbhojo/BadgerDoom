@@ -46,7 +46,10 @@ if (NOT PICO_ON_DEVICE)
         set(html "${CMAKE_CURRENT_BINARY_DIR}/badger-doom-installer.html")
         set(template "${CMAKE_CURRENT_SOURCE_DIR}/converter.html")
         set(embed "${CMAKE_CURRENT_SOURCE_DIR}/embed_converter.cmake")
-        set(installer "${CMAKE_CURRENT_SOURCE_DIR}/installer.js")
+        set(worker_scripts
+            "${CMAKE_CURRENT_SOURCE_DIR}/installer.js"
+            "${CMAKE_CURRENT_SOURCE_DIR}/shareware.js"
+        )
         set(licenses
             "${PROJECT_SOURCE_DIR}/COPYING.md"
             "${PROJECT_SOURCE_DIR}/src/adpcm-xq/license.txt"
@@ -59,10 +62,10 @@ if (NOT PICO_ON_DEVICE)
         )
         add_custom_command(OUTPUT "${html}"
             COMMAND "${CMAKE_COMMAND}" "-DPROGRAM=$<TARGET_FILE:whd_gen>"
-                "-DINSTALLER=${installer}" "-DFIRMWARE=${BADGER_FIRMWARE_UF2}"
+                "-DSCRIPTS=${worker_scripts}" "-DFIRMWARE=${BADGER_FIRMWARE_UF2}"
                 "-DPYTHON=${Python3_EXECUTABLE}" "-DTEMPLATE=${template}"
                 "-DOUTPUT=${html}" "-DLICENSES=${licenses}" -P "${embed}"
-            DEPENDS whd_gen "${template}" "${embed}" "${installer}" "${BADGER_FIRMWARE_UF2}" ${licenses}
+            DEPENDS whd_gen "${template}" "${embed}" ${worker_scripts} "${BADGER_FIRMWARE_UF2}" ${licenses}
             VERBATIM
         )
         add_custom_target(whd_converter DEPENDS "${html}")
