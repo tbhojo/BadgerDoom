@@ -4,9 +4,9 @@ set(CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 
 cmake_minimum_required(VERSION 3.13)
 
-option(BUILD_WHD_GEN_ONLY "Build only the native WAD-to-WHX converter (no SDL)" OFF)
+option(BUILD_WHD_GEN_ONLY "Build only the WAD-to-WHX converter (no SDL)" OFF)
 if (BUILD_WHD_GEN_ONLY AND PICO_SDK_PATH)
-    message(FATAL_ERROR "Build whd_gen in a separate native directory without PICO_SDK_PATH")
+    message(FATAL_ERROR "Build whd_gen in a separate directory without PICO_SDK_PATH")
 endif()
 
 # We use PICO_SDK_PATH being set as an indicator that we're doing a Pico BUILD

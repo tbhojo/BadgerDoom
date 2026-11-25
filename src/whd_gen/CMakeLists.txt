@@ -21,4 +21,42 @@ if (NOT PICO_ON_DEVICE)
 
     target_include_directories(whd_gen PRIVATE . .. ../doom)
     target_link_libraries(whd_gen PRIVATE wad adpcm-lib)
+
+    if (EMSCRIPTEN)
+        set_target_properties(whd_gen PROPERTIES SUFFIX ".js")
+        target_compile_options(whd_gen PRIVATE $<$<COMPILE_LANGUAGE:CXX>:-fexceptions>)
+        target_link_options(whd_gen PRIVATE
+            -fexceptions
+            -sSINGLE_FILE=1
+            -sENVIRONMENT=worker
+            -sMODULARIZE=1
+            -sEXPORT_NAME=createWhdConverter
+            -sEXPORTED_RUNTIME_METHODS=FS,callMain
+            -sINVOKE_RUN=0
+            -sALLOW_MEMORY_GROWTH=1
+            -sMAXIMUM_MEMORY=268435456
+            -sDYNAMIC_EXECUTION=0
+        )
+
+        set(html "${CMAKE_CURRENT_BINARY_DIR}/badger-doom-converter.html")
+        set(template "${CMAKE_CURRENT_SOURCE_DIR}/converter.html")
+        set(embed "${CMAKE_CURRENT_SOURCE_DIR}/embed_converter.cmake")
+        set(licenses
+            "${PROJECT_SOURCE_DIR}/COPYING.md"
+            "${PROJECT_SOURCE_DIR}/src/adpcm-xq/license.txt"
+            "${EMSCRIPTEN_ROOT_PATH}/LICENSE"
+            "${EMSCRIPTEN_ROOT_PATH}/system/lib/libc/musl/COPYRIGHT"
+            "${EMSCRIPTEN_ROOT_PATH}/system/lib/libcxx/LICENSE.TXT"
+            "${EMSCRIPTEN_ROOT_PATH}/system/lib/libcxxabi/LICENSE.TXT"
+            "${EMSCRIPTEN_ROOT_PATH}/system/lib/compiler-rt/LICENSE.TXT"
+            "${EMSCRIPTEN_ROOT_PATH}/system/lib/libunwind/LICENSE.TXT"
+        )
+        add_custom_command(OUTPUT "${html}"
+            COMMAND "${CMAKE_COMMAND}" "-DPROGRAM=$<TARGET_FILE:whd_gen>"
+                "-DTEMPLATE=${template}" "-DOUTPUT=${html}" "-DLICENSES=${licenses}" -P "${embed}"
+            DEPENDS whd_gen "${template}" "${embed}" ${licenses}
+            VERBATIM
+        )
+        add_custom_target(whd_converter DEPENDS "${html}")
+    endif()
 endif()

@@ -30,13 +30,33 @@ The firmware is `build-badger/src/doom_tiny.uf2`. If CMake cannot find a local p
 
 Obtain the original [Doom v1.9 shareware distribution](https://www.doomworld.com/files/file/7043-doom-v19-shareware) separately and extract `DOOM1.WAD` (you may need to run the DOS installer in DOSBox). Rename it to `doom1.wad` in your working directory. The tested file has SHA-256 `1d7d43be501e67d927e415e0b8f3e29c3bf33075e859721816f652a526cac771`. This build is for the shareware episode, not the retail Ultimate Doom or Doom II WADs.
 
-From a clone of this repository, use CMake, Ninja, and a native C/C++ compiler to build the converter. You don't need the Pico SDK, Arm toolchain, or SDL for this step.
+1. Download `badger-doom-converter.html` from the [latest release](https://github.com/tbhojo/BadgerDoom/releases/latest).
+2. Open the downloaded file in a current desktop browser. Select your WAD and click **Convert**.
+3. Click **Download doom1.whx**. Keep it next to `doom_tiny.uf2` for the install commands below.
+
+The converter runs offline in the browser. It does not upload the WAD or the result. Neither the firmware nor the converter needs to be built for a first install.
+
+<details>
+<summary>Build the converter from source (optional)</summary>
+
+For a native command-line converter, use CMake, Ninja, and a C/C++ compiler. No Pico SDK, Arm toolchain, or SDL is needed.
 
 ```sh
 cmake -S . -B build-whd-gen -G Ninja -DBUILD_WHD_GEN_ONLY=ON -DCMAKE_BUILD_TYPE=Release
 cmake --build build-whd-gen --target whd_gen
-./build-whd-gen/src/whd_gen/whd_gen doom1.wad build-whd-gen/doom1.whx
+./build-whd-gen/src/whd_gen/whd_gen doom1.wad doom1.whx
 ```
+
+To rebuild the single-file browser download, activate [Emscripten SDK 4.0.12](https://github.com/emscripten-core/emsdk/tree/4.0.12), then run:
+
+```sh
+emcmake cmake -S . -B build-browser-converter -G Ninja -DBUILD_WHD_GEN_ONLY=ON -DCMAKE_BUILD_TYPE=Release
+cmake --build build-browser-converter --target whd_converter
+```
+
+The result is `build-browser-converter/src/whd_gen/badger-doom-converter.html`.
+
+</details>
 
 Keep your WAD and the converted WHX local. The source release does not distribute either file.
 
@@ -52,10 +72,10 @@ Use a USB **data** cable and [picotool 2.1.1](https://github.com/raspberrypi/pic
    picotool save -a "$HOME/badger-backup.bin"
    ```
 
-4. Write and verify the data first, then the firmware. In the second command, substitute the path to your downloaded UF2 or use `build-badger/src/doom_tiny.uf2` if you built it. The badge reboots after the firmware is written.
+4. Write and verify the data first, then the firmware. Substitute your downloaded paths if the files are elsewhere, or use `build-badger/src/doom_tiny.uf2` if you built the firmware. The badge reboots after the firmware is written.
 
    ```sh
-   picotool load -u -v -t bin build-whd-gen/doom1.whx -o 0x10040000
+   picotool load -u -v -t bin doom1.whx -o 0x10040000
    picotool load -u -v -x doom_tiny.uf2
    ```
 
@@ -89,7 +109,7 @@ Use short taps for precise turns. The game and buttons keep running between pane
 | Symptom | What to check |
 | --- | --- |
 | No `RP2350` drive | Unlock the computer and approve the USB accessory if prompted. Use a known data cable, connect directly, and hold BOOTSEL before plugging in. `picotool info -d` can find the bootloader even if the OS hasn't mounted the drive. |
-| Blank panel on first boot | Give the panel time to clear. If it stays blank, return to BOOTSEL and verify the data with `picotool verify -t bin build-whd-gen/doom1.whx -o 0x10040000`. Copying only the firmware does not install the game. |
+| Blank panel on first boot | Give the panel time to clear. If it stays blank, return to BOOTSEL and verify the data with `picotool verify -t bin doom1.whx -o 0x10040000`. Copying only the firmware does not install the game. |
 | Need boot diagnostics | Open the badge's USB serial port at `115200` to catch startup messages. On a successful boot it reports panel initialization and that the first game frame was sent. USB is not used for gameplay input. |
 | Brief flashing or a faint cursor trail | Menu steps use differential updates and clean up after a short idle. Page changes and pause use a stronger refresh. Gameplay periodically refreshes to recover contrast; some ghosting is normal on this panel. |
 | `arm-none-eabi-gcc` or TinyUSB not found | Check the toolchain is on `PATH`. In the SDK checkout run `git submodule update --init --recursive`. Use a fresh build directory when changing toolchains or targets. |

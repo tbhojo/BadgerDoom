@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+file(READ "${PROGRAM}" converter_program)
+if (converter_program MATCHES "</[sS][cC][rR][iI][pP][tT]")
+    message(FATAL_ERROR "Converter JavaScript cannot be embedded in an HTML script element")
+endif()
+set(converter_licenses "")
+foreach (license IN LISTS LICENSES)
+    file(READ "${license}" text)
+    string(APPEND converter_licenses "${text}\n\n")
+endforeach()
+string(REPLACE "&" "&amp;" converter_licenses "${converter_licenses}")
+string(REPLACE "<" "&lt;" converter_licenses "${converter_licenses}")
+configure_file("${TEMPLATE}" "${OUTPUT}" @ONLY)

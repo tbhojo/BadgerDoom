@@ -8,6 +8,8 @@ The Badger Doom contributors modified the port in November 2026 to add the GitHu
 
 When distributing a prebuilt firmware UF2, make corresponding source for that exact build available alongside it, with the build instructions and dependency revisions. Distribute the firmware separately from game data and never include a full-flash device backup.
 
+The offline browser converter compiles the same `whd_gen` source with [Emscripten 4.0.12](https://github.com/emscripten-core/emscripten/tree/4.0.12). Runtime and component licenses are embedded in the downloadable HTML. Use the tagged repository and the source-build instructions in [README.md](README.md#prepare-the-game-data) to rebuild that download.
+
 ## UC8151 driver and badge pinout
 
 - Panel setup and FAST/TURBO tables: Pimoroni Ltd, [pimoroni-pico UC8151 driver](https://github.com/pimoroni/pimoroni-pico/blob/74cf9b7cacc050f2e6c62e5cd57d9067460c658b/drivers/uc8151/uc8151.cpp), [upstream license](https://github.com/pimoroni/pimoroni-pico/blob/74cf9b7cacc050f2e6c62e5cd57d9067460c658b/LICENSE).

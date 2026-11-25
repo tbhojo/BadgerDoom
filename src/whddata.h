@@ -1,3 +1,5 @@
+// Modified for Badger Doom (2026-11-24).
+
 #ifndef __WHDDATA__
 #define __WHDDATA__
 
@@ -6,10 +8,11 @@
 #if !USE_WHD
 typedef char textureorflatname_def_t[9];
 typedef const char* textureorflatname_t;
-#define TEXTURE_NAME(x) __STRING(x)
+#define WHD_STRINGIFY(x) #x
+#define TEXTURE_NAME(x) WHD_STRINGIFY(x)
 #define TEXTURE_NAME_NONE ""
-#define FLAT_NAME(x) __STRING(x)
-#define VPATCH_NAME(x) __STRING(x)
+#define FLAT_NAME(x) WHD_STRINGIFY(x)
+#define VPATCH_NAME(x) WHD_STRINGIFY(x)
 #define VPATCH_NAME_INVALID ""
 #define DEH_VPATCH_NAME(x) DEH_String(VPATCH_NAME(x))
 typedef const char *vpatchname_t;
